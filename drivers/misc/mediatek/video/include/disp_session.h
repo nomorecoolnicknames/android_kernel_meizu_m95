@@ -312,6 +312,15 @@ typedef struct disp_session_info_t {
 	unsigned int vsyncFPS;
 	unsigned int physicalWidth;
 	unsigned int physicalHeight;
+	/* Physical size in micrometres. A later MTK BSP inserted these two
+	 * here, between physicalHeight and isConnected, growing the struct
+	 * from 72 to 80 bytes. The Flyme HWC blob reads them at 0x2C/0x30
+	 * and only falls back to physicalWidth/Height * 1000 when they are
+	 * zero, so with the old layout it was reading isConnected and
+	 * isHDCPSupported as a physical size. [FACT: DisplayManager::
+	 * setDisplayData reads sp+44/sp+48 with the buffer based at sp.] */
+	unsigned int physicalWidthUm;
+	unsigned int physicalHeightUm;
 	unsigned int isConnected;
 	unsigned int isHDCPSupported;
 	unsigned int isOVLDisabled;

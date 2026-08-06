@@ -5482,6 +5482,10 @@ int primary_display_get_info(disp_session_info *info)
 
 	dispif_info->physicalWidth = DISP_GetActiveWidth();
 	dispif_info->physicalHeight = DISP_GetActiveHeight();
+	/* Same values in micrometres; the vendor HWC prefers these and only
+	 * multiplies the millimetre pair by 1000 when they are zero. */
+	dispif_info->physicalWidthUm = DISP_GetActiveWidth() * 1000;
+	dispif_info->physicalHeightUm = DISP_GetActiveHeight() * 1000;
 
 	dispif_info->vsyncFPS = pgc->lcm_fps;
 
