@@ -50,7 +50,21 @@ struct fpsimd_context {
 	struct _aarch64_ctx head;
 	__u32 fpsr;
 	__u32 fpcr;
+	/*
+	 * LineageOS exports these uapi headers to userspace with
+	 * `headers_install ARCH=arm64` and then hands the result to *every*
+	 * cc_ module, including the 32-bit ARM variants. __uint128_t is an
+	 * arm64-only compiler builtin, so the 32-bit compile of anything that
+	 * pulls in <signal.h> (e.g. external/tinycompress) fails with
+	 * "unknown type name '__uint128_t'". A 32-bit process can never use
+	 * this aarch64 signal frame anyway - it only has to compile. Keep the
+	 * layout identical (32 x 128 bits == 64 x 64 bits).
+	 */
+#if defined(__SIZEOF_INT128__)
 	__uint128_t vregs[32];
+#else
+	__u64 vregs[64];
+#endif
 };
 
 /* ESR_EL1 context */

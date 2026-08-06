@@ -587,6 +587,11 @@ HPS_END:
 				     hps_sys.down_load_avg, hps_sys.tlp_avg, hps_sys.rush_cnt,
 				     str_target);
 			else {
+				/* M95 bring-up: the HPS "action end" fires every 40 ms
+				 * (the algo runs continuously under this kernel's
+				 * load readings) and wraps the ram console ring.
+				 * Keep the action, silence the print. */
+				if (0)
 				hps_warn
 				    ("(0x%X)%s action end (%u)(%u)(%u) %s %s%s (%u)(%u)(%u)(%u) %s\n",
 				     ((hps_ctxt.hps_func_control << 12) | hps_sys.action_id),

@@ -353,8 +353,10 @@ void i2c_dump_info1(struct mt_i2c *i2c)
 
 void i2c_dump_info(struct mt_i2c *i2c)
 {
-	/* I2CFUC(); */
-	/* int val=0; */
+	/* M95 bring-up: no-op — the bat_thread charger-read failures spammed
+	 * this 100+ line register dump every 2 s, which wrapped the MTK ram
+	 * console ring and erased init/fs_mgr logs. Silence it. */
+	return;
 	pr_err("i2c_dump_info ++++++++++++++++++++++++++++++++++++++++++\n");
 	pr_err("I2C structure:\n"
 	       I2CTAG "Clk=%d,Id=%d,Op=%x,Irq_stat=%x,Total_len=%x\n"

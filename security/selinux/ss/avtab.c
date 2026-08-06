@@ -44,7 +44,7 @@ avtab_insert_node(struct avtab *h, int hvalue,
 		return NULL;
 	newnode->key = *key;
 
-	if (key->specified & AVTAB_OP) {
+	if (key->specified & (AVTAB_OP | AVTAB_XPERMS)) {
 		ops = kmem_cache_zalloc(avtab_operation_cachep, GFP_KERNEL);
 		if (ops == NULL) {
 			kmem_cache_free(avtab_node_cachep, newnode);
@@ -468,7 +468,7 @@ int avtab_read_item(struct avtab *a, void *fp, struct policydb *pol,
 	}
 
 	if ((vers < POLICYDB_VERSION_IOCTL_OPERATIONS)
-			|| !(key.specified & AVTAB_OP)) {
+			|| !(key.specified & (AVTAB_OP | AVTAB_XPERMS))) {
 		rc = next_entry(buf32, fp, sizeof(u32));
 		if (rc) {
 			printk(KERN_ERR "SELinux: avtab: truncated entry\n");
@@ -478,6 +478,11 @@ int avtab_read_item(struct avtab *a, void *fp, struct policydb *pol,
 	} else {
 		memset(&ops, 0, sizeof(struct avtab_operation));
 		rc = next_entry(&ops.type, fp, sizeof(u8));
+		if (rc) {
+			printk(KERN_ERR "SELinux: avtab: truncated entry\n");
+			return rc;
+		}
+		rc = next_entry(&ops.driver, fp, sizeof(u8));
 		if (rc) {
 			printk(KERN_ERR "SELinux: avtab: truncated entry\n");
 			return rc;

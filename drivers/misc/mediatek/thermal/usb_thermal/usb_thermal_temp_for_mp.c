@@ -169,7 +169,8 @@ static int get_hw_usb_board_temp(void)
 	ret = ret * 1500 / 4096;
 	/* ret = ret*1800/4096;//82's ADC power */
 	output = mtk_ts_bts_usb_volt_to_temp(ret);
-	printk("[usb_cooling]USB board output mv = %d, temperature = %d\n", ret, output);
+	// M95 bring-up: silence the 0.5 s spam (wraps the ram console ring)
+	// printk("[usb_cooling]USB board output mv = %d, temperature = %d\n", ret, output);
 	return output;
 }
 

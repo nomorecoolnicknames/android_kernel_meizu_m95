@@ -50,6 +50,7 @@ struct avtab_key {
 				AVTAB_OPTYPE_AUDITALLOW | \
 				AVTAB_OPTYPE_DONTAUDIT)
 #define AVTAB_OP		(AVTAB_OPNUM | AVTAB_OPTYPE)
+#define AVTAB_XPERMS		0x8000 /* ioctl xperm entries, Android 8+ policy bit (M95 bring-up) */
 #define AVTAB_ENABLED_OLD   0x80000000 /* reserved for used in cond_avtab */
 #define AVTAB_ENABLED		0x8000 /* reserved for used in cond_avtab */
 	u16 specified;	/* what field is specified */
@@ -57,6 +58,7 @@ struct avtab_key {
 
 struct avtab_operation {
 	u8 type;
+	u8 driver;	/* ioctl driver; Android 8+ policy writes it (M95 bring-up) */
 	struct operation_perm op;
 };
 

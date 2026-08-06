@@ -462,7 +462,8 @@ int secspi_session_open(void)
 		/* open device */
 		mc_ret = mc_open_device(secspi_devid);
 		if (MC_DRV_OK != mc_ret) {
-			SPIDEV_MSG("mc_open_device failed: %d\n", mc_ret);
+			// M95 bring-up: silence the 2 s retry spam (wraps ram console)
+			// SPIDEV_MSG("mc_open_device failed: %d\n", mc_ret);
 			break;
 		}
 

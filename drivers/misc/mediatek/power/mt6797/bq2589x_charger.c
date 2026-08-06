@@ -114,6 +114,12 @@ int bq2589x_sed_read_byte(u8 *data, u8 reg)
 {
 	int ret;
 
+	if (!g_bq_sed)
+		return -ENODEV;
+
+	if (!g_bq_sed)
+		return -ENODEV;
+
 	mutex_lock(&i2c_mutex);
 	ret = i2c_smbus_read_byte_data(g_bq_sed->client, reg);
 	if (ret < 0) {
@@ -130,6 +136,12 @@ int bq2589x_sed_read_byte(u8 *data, u8 reg)
  int bq2589x_sed_write_byte(u8 reg, u8 data)
 {
 	int ret;
+
+	if (!g_bq_sed)
+		return -ENODEV;
+
+	if (!g_bq_sed)
+		return -ENODEV;
 
 	mutex_lock(&i2c_mutex);
 	ret = i2c_smbus_write_byte_data(g_bq_sed->client, reg, data);
@@ -637,6 +649,8 @@ void bq2589x_charge_dump_register(void)
 		printk("[bq2589x_dump_register_main] Reg[0x%X]=0x%X\n", i, regval);        
 	}
 
+	if (g_bq_sed)
+	if (g_bq_sed)
 	for (i=0;i<BQ2589x_REG_NUM;i++)
 	{
 		bq2589x_sed_read_byte(&regval, i);
@@ -1124,7 +1138,11 @@ static int bq2589x_charger_probe(struct i2c_client *client,
 		bq->dev = &client->dev;
 		bq->client = client;
 		i2c_set_clientdata(client, bq);
-		g_bq_sed = bq;
+		if (i2c_smbus_read_byte_data(client, BQ2589X_REG_14) < 0) {
+			dev_info(&client->dev, "bq2589x secondary charger not present; sed disabled\n");
+		} else {
+			g_bq_sed = bq;
+		}
 	}
 	chg_hw_init_done = KAL_TRUE;
 

@@ -680,7 +680,7 @@ static void context_struct_compute_av(struct context *scontext,
 	 * this permission check, then use it.
 	 */
 	avkey.target_class = tclass;
-	avkey.specified = AVTAB_AV | AVTAB_OP;
+	avkey.specified = AVTAB_AV | AVTAB_OP | AVTAB_XPERMS;
 	sattr = flex_array_get(policydb.type_attr_map_array, scontext->type - 1);
 	BUG_ON(!sattr);
 	tattr = flex_array_get(policydb.type_attr_map_array, tcontext->type - 1);
@@ -698,7 +698,7 @@ static void context_struct_compute_av(struct context *scontext,
 					avd->auditallow |= node->datum.u.data;
 				else if (node->key.specified == AVTAB_AUDITDENY)
 					avd->auditdeny &= node->datum.u.data;
-				else if (ops && (node->key.specified & AVTAB_OP))
+				else if (ops && (node->key.specified & (AVTAB_OP | AVTAB_XPERMS)))
 					services_compute_operation_type(ops, node);
 			}
 
@@ -1032,7 +1032,7 @@ void security_compute_operation(u32 ssid,
 	}
 
 	avkey.target_class = tclass;
-	avkey.specified = AVTAB_OP;
+	avkey.specified = AVTAB_OP | AVTAB_XPERMS;
 	sattr = flex_array_get(policydb.type_attr_map_array,
 				scontext->type - 1);
 	BUG_ON(!sattr);
