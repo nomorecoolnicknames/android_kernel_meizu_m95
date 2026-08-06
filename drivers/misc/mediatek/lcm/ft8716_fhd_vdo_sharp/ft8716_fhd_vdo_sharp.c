@@ -428,7 +428,9 @@ static void lcm_init(void)
 	unsigned int array[16];
 	unsigned char c3[4] = {0};
 
+	lcm_print("M95DBG lcm_init enter\n");
 	lcm_power_switch(1);
+	lcm_print("M95DBG lcm_init after power_switch\n");
 #ifdef BUILD_LK
 	read_reg_v2(0xDA, &c3[0], 1);
 	read_reg_v2(0xDB, &c3[1], 1);
@@ -443,6 +445,7 @@ static void lcm_init(void)
 	//lcm_print("0x0c = %x\n", buffer[0]);
 	push_table(lcm_slpout, sizeof(lcm_slpout)/sizeof(struct LCM_setting_table),1);
 	push_table(lcm_dispon, sizeof(lcm_dispon)/sizeof(struct LCM_setting_table),1);
+	lcm_print("M95DBG lcm_init done (slpout+dispon pushed)\n");
 }
 #define POWER_OFF_SUSPEND
 static void lcm_suspend(void)

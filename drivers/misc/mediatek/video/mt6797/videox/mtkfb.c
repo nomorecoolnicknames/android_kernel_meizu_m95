@@ -2306,12 +2306,12 @@ static int _parse_tag_videolfb(void)
 
 found:
 	is_videofb_parse_done = 1;
-	DISPCHECK("[DT][videolfb] islcmfound = %d\n", islcmconnected);
-	DISPCHECK("[DT][videolfb] is_lcm_inited = %d\n", is_lcm_inited);
-	DISPCHECK("[DT][videolfb] fps        = %d\n", lcd_fps);
-	DISPCHECK("[DT][videolfb] fb_base    = 0x%lx\n", (unsigned long)fb_base);
-	DISPCHECK("[DT][videolfb] vram       = 0x%x (%d)\n", vramsize, vramsize);
-	DISPCHECK("[DT][videolfb] lcmname    = %s\n", mtkfb_lcm_name);
+	pr_info("M95DBG [DT][videolfb] islcmfound = %d\n", islcmconnected);
+	pr_info("M95DBG [DT][videolfb] is_lcm_inited = %d\n", is_lcm_inited);
+	pr_info("M95DBG [DT][videolfb] fps        = %d\n", lcd_fps);
+	pr_info("M95DBG [DT][videolfb] fb_base    = 0x%lx\n", (unsigned long)fb_base);
+	pr_info("M95DBG [DT][videolfb] vram       = 0x%x (%d)\n", vramsize, vramsize);
+	pr_info("M95DBG [DT][videolfb] lcmname    = %s\n", mtkfb_lcm_name);
 	return 0;
 }
 
@@ -2429,9 +2429,12 @@ static int mtkfb_probe(struct device *dev)
 	struct platform_device *pdev;
 	long dts_gpio_state = 0;
 
-	pr_debug("mtkfb_probe\n");
+	pr_info("M95DBG mtkfb_probe enter\n");
 
 	_parse_tag_videolfb();
+
+	pr_info("M95DBG mtkfb_probe after videolfb: is_lcm_inited=%d lcmname=%s lcd_fps=%d\n",
+		is_lcm_inited, mtkfb_lcm_name, lcd_fps);
 
 	init_state = 0;
 
@@ -2461,7 +2464,10 @@ static int mtkfb_probe(struct device *dev)
 	fbdev->fb_pa_base = fb_base;
 
 	primary_display_set_frame_buffer_address((unsigned long)(fbdev->fb_va_base), fb_pa);
-	primary_display_init(mtkfb_find_lcm_driver(), lcd_fps, is_lcm_inited);
+	pr_info("M95DBG mtkfb_probe calling primary_display_init lcm=%s inited=%d\n",
+		mtkfb_find_lcm_driver(), is_lcm_inited);
+	r = primary_display_init(mtkfb_find_lcm_driver(), lcd_fps, is_lcm_inited);
+	pr_info("M95DBG mtkfb_probe primary_display_init ret=%d\n", r);
 
 	init_state++;		/* 1 */
 	MTK_FB_XRES = DISP_GetScreenWidth();
@@ -2536,6 +2542,8 @@ static int mtkfb_probe(struct device *dev)
 
 	fbdev->state = MTKFB_ACTIVE;
 
+	pr_info("M95DBG mtkfb_probe SUCCESS: xres=%d yres=%d bpp=%d\n",
+		MTK_FB_XRES, MTK_FB_YRES, MTK_FB_BPP);
 	MSG_FUNC_LEAVE();
 	return 0;
 
