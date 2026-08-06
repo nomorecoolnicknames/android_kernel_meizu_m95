@@ -1355,24 +1355,54 @@ int _ioctl_get_display_caps(unsigned long arg)
  * This is correct as long as the newer BSP appended its fields; if it inserted
  * them, the head values land on the wrong offsets and this needs the real
  * layout instead.
+ *
+ * The same drift shows up on more than one query - GET_DISPLAY_CAPS
+ * (0x40384FDA, 56 vs our 24) and GET_SESSION_INFO (0x40504FD0, 80 vs our 72)
+ * so far - so keep the widening in one helper.
  */
-static int _ioctl_get_display_caps_sized(unsigned long arg, unsigned int user_size)
+static int _ioctl_widened(unsigned long arg, unsigned int user_size,
+			  size_t native_size, int (*handler)(unsigned long))
 {
 	void __user *argp = (void __user *)arg;
 
-	if (user_size < sizeof(disp_caps_info)) {
+	if (user_size < native_size) {
 		DISPERR("%s: caller asked for %u bytes, less than %zu\n",
-			__func__, user_size, sizeof(disp_caps_info));
+			__func__, user_size, native_size);
 		return -EINVAL;
 	}
 
-	if (clear_user(argp + sizeof(disp_caps_info),
-		       user_size - sizeof(disp_caps_info))) {
+	if (user_size > native_size &&
+	    clear_user(argp + native_size, user_size - native_size)) {
 		DISPERR("%s: clear_user failed\n", __func__);
 		return -EFAULT;
 	}
 
-	return _ioctl_get_display_caps(arg);
+	return handler(arg);
+}
+
+/* Returns 0 when cmd is not one of the widened queries. */
+static int _ioctl_widened_dispatch(unsigned int cmd, unsigned long arg, int *ret)
+{
+	if (_IOC_TYPE(cmd) != _IOC_TYPE(DISP_IOCTL_GET_DISPLAY_CAPS))
+		return 0;
+
+	if (_IOC_NR(cmd) == _IOC_NR(DISP_IOCTL_GET_DISPLAY_CAPS) &&
+	    _IOC_SIZE(cmd) != _IOC_SIZE(DISP_IOCTL_GET_DISPLAY_CAPS)) {
+		*ret = _ioctl_widened(arg, _IOC_SIZE(cmd),
+				      sizeof(disp_caps_info),
+				      _ioctl_get_display_caps);
+		return 1;
+	}
+
+	if (_IOC_NR(cmd) == _IOC_NR(DISP_IOCTL_GET_SESSION_INFO) &&
+	    _IOC_SIZE(cmd) != _IOC_SIZE(DISP_IOCTL_GET_SESSION_INFO)) {
+		*ret = _ioctl_widened(arg, _IOC_SIZE(cmd),
+				      sizeof(disp_session_info),
+				      _ioctl_get_info);
+		return 1;
+	}
+
+	return 0;
 }
 
 int _ioctl_wait_vsync(unsigned long arg)
@@ -1550,12 +1580,9 @@ long mtk_disp_mgr_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 	/* DISPMSG("mtk_disp_mgr_ioctl, cmd=%s, arg=0x%08x\n", _session_ioctl_spy(cmd), arg); */
 
-	/* Accept GET_DISPLAY_CAPS from callers built against a wider
-	 * disp_caps_info - see _ioctl_get_display_caps_sized(). */
-	if (_IOC_TYPE(cmd) == _IOC_TYPE(DISP_IOCTL_GET_DISPLAY_CAPS) &&
-	    _IOC_NR(cmd) == _IOC_NR(DISP_IOCTL_GET_DISPLAY_CAPS) &&
-	    _IOC_SIZE(cmd) != _IOC_SIZE(DISP_IOCTL_GET_DISPLAY_CAPS))
-		return _ioctl_get_display_caps_sized(arg, _IOC_SIZE(cmd));
+	/* Queries whose struct grew in a later BSP - see _ioctl_widened(). */
+	if (_ioctl_widened_dispatch(cmd, arg, &ret))
+		return ret;
 
 	switch (cmd) {
 	case DISP_IOCTL_CREATE_SESSION:
@@ -1724,15 +1751,16 @@ static long mtk_disp_mgr_compat_ioctl(struct file *file, unsigned int cmd,  unsi
 	long ret = -ENOIOCTLCMD;
 	/*DISPMSG("mtk_disp_mgr_compat_ioctl, cmd=%s, arg=0x%08lx\n", _session_compat_ioctl_spy(cmd), arg);*/
 
-	/* Same widened-struct case as the native path. compat_disp_caps_info is
-	 * field-for-field identical to disp_caps_info (all 32-bit), so the
-	 * native handler can serve the 32-bit caller directly once the pointer
-	 * is converted. */
-	if (_IOC_TYPE(cmd) == _IOC_TYPE(COMPAT_DISP_IOCTL_GET_DISPLAY_CAPS) &&
-	    _IOC_NR(cmd) == _IOC_NR(COMPAT_DISP_IOCTL_GET_DISPLAY_CAPS) &&
-	    _IOC_SIZE(cmd) != _IOC_SIZE(COMPAT_DISP_IOCTL_GET_DISPLAY_CAPS))
-		return _ioctl_get_display_caps_sized((unsigned long)compat_ptr(arg),
-						     _IOC_SIZE(cmd));
+	/* Same widened-struct case as the native path. The compat structs are
+	 * field-for-field identical to the native ones here (everything is
+	 * 32-bit), so the native handlers can serve a 32-bit caller directly
+	 * once the pointer is converted. */
+	{
+		int wret;
+
+		if (_ioctl_widened_dispatch(cmd, (unsigned long)compat_ptr(arg), &wret))
+			return wret;
+	}
 
 	switch (cmd) {
 	case COMPAT_DISP_IOCTL_CREATE_SESSION:
