@@ -136,6 +136,8 @@ typedef struct compat_disp_caps_t {
 	compat_uint_t disp_feature;
 	compat_uint_t is_support_frame_cfg_ioctl;
 	compat_uint_t is_output_rotated;
+	/* Mirrors the rsz_in_res_list appended to disp_caps_info. */
+	compat_uint_t rsz_in_res_list[RSZ_RES_LIST_NUM][2];
 } compat_disp_caps_info;
 
 

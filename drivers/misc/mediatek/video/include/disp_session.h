@@ -381,6 +381,8 @@ typedef enum {
 	DISP_FEATURE_PARTIAL = 0x00000004,
 } DISP_FEATURE;
 
+#define RSZ_RES_LIST_NUM 4
+
 typedef struct disp_caps_t {
 	DISP_CAP_OUTPUT_MODE output_mode;
 	DISP_CAP_OUTPUT_PASS output_pass;
@@ -391,6 +393,16 @@ typedef struct disp_caps_t {
 	unsigned int disp_feature;
 	int is_support_frame_cfg_ioctl;
 	int is_output_rotated;
+	/* Resizer input resolution list, appended by a later MTK BSP; this is
+	 * what takes the struct from 24 to 56 bytes and therefore what makes
+	 * DISP_IOCTL_GET_DISPLAY_CAPS encode as 0x40384FDA - the number the
+	 * Flyme HWC blob sends. The stock Flyme 8 kernel (3.18.41+) leaves it
+	 * zeroed, and disassembly of the blob shows it reads only offset 0x14
+	 * (is_output_rotated) out of this struct, so zeros here are what the
+	 * reference kernel provides too. [FACT: le_x620 MT6797 BSP
+	 * disp_session.h; stock kernel _ioctl_get_display_caps writes only
+	 * offsets 0/8/12/16/20 and copies 0x38 bytes back.] */
+	unsigned int rsz_in_res_list[RSZ_RES_LIST_NUM][2];
 } disp_caps_info;
 
 typedef struct disp_session_buf_t {
