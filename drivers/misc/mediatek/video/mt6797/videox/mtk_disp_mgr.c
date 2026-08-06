@@ -1333,6 +1333,48 @@ int _ioctl_get_display_caps(unsigned long arg)
 	return ret;
 }
 
+/*
+ * The Flyme 8 vendor HWC blob (hwcomposer.mt6797.so, identical to the stock
+ * one) was built against a later MTK BSP whose disp_caps_info is 56 bytes, so
+ * it issues _IOW('O', 218, 0x38) = 0x40384FDA, while this kernel declares the
+ * struct as 24 bytes and therefore expects 0x40184FDA. The ioctl number encodes
+ * sizeof, so the switch in mtk_disp_mgr_ioctl() drops that command into
+ * default: and answers -ENOIOCTLCMD:
+ *
+ *   hwcomposer: ! (0) DISP_IOCTL_GET_DISPLAY_CAPS id:0 err:-1
+ *   [DISP][mtk_disp_mgr_ioctl #1615]ERROR:[session]ioctl not supported, 0x40384fda
+ *
+ * The blob then takes its error-logging path, which deadlocks inside its own
+ * Singleton<Debugger>, so IComposer is never registered and surfaceflinger
+ * waits for it forever - the device sits on the bootlogo with a perfectly
+ * healthy display driver underneath (mtkfb_probe reports 1080x1920x32).
+ *
+ * Serve any caller that asks for at least our struct: fill the fields this
+ * kernel knows at the head of the buffer and zero the tail, so capabilities it
+ * does not implement read back as absent rather than as caller stack garbage.
+ * This is correct as long as the newer BSP appended its fields; if it inserted
+ * them, the head values land on the wrong offsets and this needs the real
+ * layout instead.
+ */
+static int _ioctl_get_display_caps_sized(unsigned long arg, unsigned int user_size)
+{
+	void __user *argp = (void __user *)arg;
+
+	if (user_size < sizeof(disp_caps_info)) {
+		DISPERR("%s: caller asked for %u bytes, less than %zu\n",
+			__func__, user_size, sizeof(disp_caps_info));
+		return -EINVAL;
+	}
+
+	if (clear_user(argp + sizeof(disp_caps_info),
+		       user_size - sizeof(disp_caps_info))) {
+		DISPERR("%s: clear_user failed\n", __func__);
+		return -EFAULT;
+	}
+
+	return _ioctl_get_display_caps(arg);
+}
+
 int _ioctl_wait_vsync(unsigned long arg)
 {
 	int ret = 0;
@@ -1508,6 +1550,13 @@ long mtk_disp_mgr_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 	/* DISPMSG("mtk_disp_mgr_ioctl, cmd=%s, arg=0x%08x\n", _session_ioctl_spy(cmd), arg); */
 
+	/* Accept GET_DISPLAY_CAPS from callers built against a wider
+	 * disp_caps_info - see _ioctl_get_display_caps_sized(). */
+	if (_IOC_TYPE(cmd) == _IOC_TYPE(DISP_IOCTL_GET_DISPLAY_CAPS) &&
+	    _IOC_NR(cmd) == _IOC_NR(DISP_IOCTL_GET_DISPLAY_CAPS) &&
+	    _IOC_SIZE(cmd) != _IOC_SIZE(DISP_IOCTL_GET_DISPLAY_CAPS))
+		return _ioctl_get_display_caps_sized(arg, _IOC_SIZE(cmd));
+
 	switch (cmd) {
 	case DISP_IOCTL_CREATE_SESSION:
 		{
@@ -1674,6 +1723,17 @@ static long mtk_disp_mgr_compat_ioctl(struct file *file, unsigned int cmd,  unsi
 {
 	long ret = -ENOIOCTLCMD;
 	/*DISPMSG("mtk_disp_mgr_compat_ioctl, cmd=%s, arg=0x%08lx\n", _session_compat_ioctl_spy(cmd), arg);*/
+
+	/* Same widened-struct case as the native path. compat_disp_caps_info is
+	 * field-for-field identical to disp_caps_info (all 32-bit), so the
+	 * native handler can serve the 32-bit caller directly once the pointer
+	 * is converted. */
+	if (_IOC_TYPE(cmd) == _IOC_TYPE(COMPAT_DISP_IOCTL_GET_DISPLAY_CAPS) &&
+	    _IOC_NR(cmd) == _IOC_NR(COMPAT_DISP_IOCTL_GET_DISPLAY_CAPS) &&
+	    _IOC_SIZE(cmd) != _IOC_SIZE(COMPAT_DISP_IOCTL_GET_DISPLAY_CAPS))
+		return _ioctl_get_display_caps_sized((unsigned long)compat_ptr(arg),
+						     _IOC_SIZE(cmd));
+
 	switch (cmd) {
 	case COMPAT_DISP_IOCTL_CREATE_SESSION:
 		{
