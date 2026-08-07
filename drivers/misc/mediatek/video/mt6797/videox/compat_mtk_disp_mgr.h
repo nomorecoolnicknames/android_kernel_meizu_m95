@@ -166,7 +166,8 @@ struct compat_disp_frame_cfg_t {
 
 	/* input config */
 	compat_uint_t input_layer_num;
-	compat_disp_input_config input_cfg[8];
+	/* Mirrors the native array, widened to 12 slots. */
+	compat_disp_input_config input_cfg[12];
 	compat_uint_t overlap_layer_num;
 
 	/* constant layer */

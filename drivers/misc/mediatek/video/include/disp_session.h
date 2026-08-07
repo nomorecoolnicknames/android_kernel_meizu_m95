@@ -241,6 +241,12 @@ typedef struct disp_input_config_t {
 	uint8_t isTdshp;
 	uint8_t identity;
 	uint8_t connected_type;
+	/* A later MTK BSP widened this element from 104 to 120 bytes. The names
+	 * of the added members are unknown and this kernel does not use them,
+	 * but the size has to match or every layer after the first lands at the
+	 * wrong offset. [FACT: DispDevice::frameConfig walks the array with a
+	 * 120 byte stride - ldrb w15, [x12], #240 over two elements.] */
+	uint32_t reserved_newer_bsp[4];
 } disp_input_config;
 
 typedef struct disp_output_config_t {
@@ -257,6 +263,10 @@ typedef struct disp_output_config_t {
 	unsigned int buff_idx;
 	unsigned int interface_idx;
 	unsigned int frm_sequence;
+	/* Same widening, 64 -> 80. Confirmed independently by the ioctl number
+	 * the blob sends for FRAME_CONFIG: its disp_session_output_config is 88
+	 * bytes (uint + padding + this struct), ours was 72. */
+	unsigned int reserved_newer_bsp[4];
 } disp_output_config;
 
 typedef struct disp_session_input_config_t {
@@ -282,7 +292,10 @@ struct disp_frame_cfg_t {
 
 	/* input config */
 	unsigned int input_layer_num;
-	disp_input_config input_cfg[8];
+	/* 12 slots, not 8: 16 + 12*120 = 1456, which is exactly where the blob
+	 * stores the overlap count (str w24, [x8, #1464], buffer at x8+8). Our
+	 * old 16 + 8*104 = 848 put every field after the array 608 bytes early. */
+	disp_input_config input_cfg[12];
 	unsigned int overlap_layer_num;
 
 	/* constant layer */
@@ -295,7 +308,17 @@ struct disp_frame_cfg_t {
 
 	/* trigger config */
 	DISP_MODE mode;
+	/* Lands at offset 1676, which is where DispDevice::frameConfig writes
+	 * its second argument (str w19, [x8, #1684]). This is the field the
+	 * whole display path hangs on: primary_display_frame_cfg only wakes the
+	 * present-fence worker when it is not -1, and with the old layout it was
+	 * read from offset 1036 - bytes the blob never wrote - and came back 0. */
 	unsigned int present_fence_idx;
+	/* Offset 1680, the fourth argument (str w22, [x8, #1688]). Unused here;
+	 * present only to keep what follows in place. */
+	int prev_present_fence_fd;
+	unsigned int reserved_newer_bsp[3];
+	/* Offset 1696, the EXTD_TRIGGER_MODE argument (str w23, [x8, #1704]). */
 	EXTD_TRIGGER_MODE tigger_mode;
 	DISP_SESSION_USER user;
 };
