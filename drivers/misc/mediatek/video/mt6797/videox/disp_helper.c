@@ -327,7 +327,24 @@ void disp_helper_option_init(void)
 
 	/* ===================Begin: lowpower option setting==================== */
 	disp_helper_set_option(DISP_OPT_SODI_SUPPORT,			1);
-	disp_helper_set_option(DISP_OPT_IDLE_MGR,			1);
+	/* Bring-up: the display idle manager stalls this port. Once it decides
+	 * the path is idle it switches direct-link to decouple and, with
+	 * DISP_OPT_IDLEMGR_DISABLE_ROUTINE_IRQ below, masks RDMA0_DONE - which
+	 * is what IF_VSYNC maps to for a video-mode panel like ours. Nothing
+	 * then delivers vsync, so nobody submits a frame, so nothing kicks it
+	 * back out: a self-sustaining stall.
+	 *
+	 * Observed exactly that: /d/displowpower/kickdump ends with
+	 * primary_display_switch_mode at 286.9s of an uptime that was already
+	 * past 1500s, and the rdma0 counter in /proc/interrupts had not moved
+	 * in 5s. Writing enable_idlemgr:0 to /d/mtkfb at runtime restarted
+	 * scanout immediately - rdma0 gained 608 interrupts over the next 5s -
+	 * and unblocked the producer, which went from starved to queued-frames=3.
+	 *
+	 * Leave it off until the port composes reliably; it is a power
+	 * optimisation, not a correctness feature.
+	 */
+	disp_helper_set_option(DISP_OPT_IDLE_MGR,			0);
 
 	/* 1. vdo mode + screen idle(need idlemgr) */
 	disp_helper_set_option(DISP_OPT_IDLEMGR_SWTCH_DECOUPLE,		1);
