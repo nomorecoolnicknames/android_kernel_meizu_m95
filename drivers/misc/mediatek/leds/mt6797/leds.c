@@ -94,7 +94,11 @@ char *leds_name[MT65XX_LED_TYPE_TOTAL] = {
 	"blue",
 	"jogball-backlight",
 	"keyboard-backlight",
-	"button-backlight",
+	/* m95 (Meizu MX6): the home-button breathing LED is named "mx-led" on
+	 * stock Flyme (stock DTB led@5 = "mediatek,mx-led", ISINK mode 3) and
+	 * the stock lights.mt6797.so blob drives /sys/class/leds/mx-led.
+	 * Stock kernel (Marshmallow_M80-6.0 leds.c) uses the same slot rename. */
+	"mx-led",
 	"lcd-backlight",
 };
 

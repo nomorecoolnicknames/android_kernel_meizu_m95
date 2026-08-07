@@ -185,7 +185,10 @@
 		pwm_config = <0 0 0 0 0>;
 	};
 	led5:led@5 {
-		compatible = "mediatek,button-backlight";
+		/* Stock MX6 DTB names this ISINK LED "mediatek,mx-led" (home-button
+		 * breathing/notification LED); lights.mt6797.so writes
+		 * /sys/class/leds/mx-led. Keep mode 3 (ISINK) as stock. */
+		compatible = "mediatek,mx-led";
 		led_mode = <3>;
 		data = <1>;
 		pwm_config = <0 0 0 0 0>;
@@ -556,7 +559,9 @@
 /* TOUCH end */
 &accdet {
 		accdet-mic-vol = <7>;
-		headset-mode-setting = <0x500 0x500 1 0x1F0 0x800 0x800 0x20>;
+		/* word[4] 0x800 -> 0x400: match the stock MX6 DTB
+		 * (stock boot.img DTB: <0x500 0x500 0x01 0x1f0 0x400 0x800 0x20>) */
+		headset-mode-setting = <0x500 0x500 1 0x1F0 0x400 0x800 0x20>;
 		accdet-plugout-debounce = <1>;
 		/*1:ACC mode, 2:low cost without in bias, 6:low cost with in bias*/
 		accdet-mic-mode = <1>;
