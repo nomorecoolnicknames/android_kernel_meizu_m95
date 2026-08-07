@@ -1407,6 +1407,28 @@ static int _ioctl_widened_dispatch(unsigned int cmd, unsigned long arg, int *ret
 		return 1;
 	}
 
+	/* FRAME_CONFIG is the one command whose encoded size is meaningless on
+	 * both sides: the macro names disp_session_output_config while the
+	 * handler reads a disp_frame_cfg_t, an unrelated and much larger
+	 * struct. That is MTK's own quirk, but it still has to agree between
+	 * kernel and blob, and it does not - we compute 72 bytes for
+	 * disp_session_output_config while the Flyme blob computes 88, so the
+	 * command was landing in default: and being rejected:
+	 *
+	 *   [DISP][mtk_disp_mgr_ioctl]ERROR:[session]ioctl not supported, 0x40584fdc
+	 *
+	 * with 0x40584FDC decoding as _IOW('O', 220, 0x58). That single
+	 * rejection is what stops every frame: no frame config means the
+	 * present-fence worker is never woken, the fence never signals, and
+	 * surfaceflinger's backpressure gate stops latching. Since the size
+	 * carries no meaning here, match on the command number alone.
+	 */
+	if (_IOC_NR(cmd) == _IOC_NR(DISP_IOCTL_FRAME_CONFIG) &&
+	    _IOC_SIZE(cmd) != _IOC_SIZE(DISP_IOCTL_FRAME_CONFIG)) {
+		*ret = _ioctl_frame_config(arg);
+		return 1;
+	}
+
 	return 0;
 }
 
