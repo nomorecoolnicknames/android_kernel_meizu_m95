@@ -31,6 +31,7 @@
 #include <linux/spinlock.h>
 #include <linux/param.h>
 #include <linux/uaccess.h>
+#include <linux/stddef.h>
 #include <linux/sched.h>
 #include <linux/string.h>
 #include <linux/workqueue.h>
@@ -1203,6 +1204,37 @@ int _ioctl_frame_config(unsigned long arg)
 		pr_err("[FB Driver]: copy_from_user failed! line:%d\n", __LINE__);
 		kfree(frame_cfg);
 		return -EFAULT;
+	}
+
+	/* M95DBG: present_fence_idx read as 0 while the blob had just been
+	 * handed index 1 and 2, so the field is landing on the wrong offset -
+	 * disp_frame_cfg_t drifted between BSPs like caps and session_info did.
+	 * Dump the tail of what actually arrived, plus our own offsets, and the
+	 * index will be visible at whatever offset the blob really uses. */
+	{
+		static int m95dbg_dumped;
+
+		if (m95dbg_dumped < 2) {
+			m95dbg_dumped++;
+			pr_info("M95DBG cfg size=%zu off: session=%zu in_num=%zu overlap=%zu const_num=%zu out_en=%zu mode=%zu pfidx=%zu trig=%zu user=%zu\n",
+				sizeof(*frame_cfg),
+				offsetof(struct disp_frame_cfg_t, session_id),
+				offsetof(struct disp_frame_cfg_t, input_layer_num),
+				offsetof(struct disp_frame_cfg_t, overlap_layer_num),
+				offsetof(struct disp_frame_cfg_t, const_layer_num),
+				offsetof(struct disp_frame_cfg_t, output_en),
+				offsetof(struct disp_frame_cfg_t, mode),
+				offsetof(struct disp_frame_cfg_t, present_fence_idx),
+				offsetof(struct disp_frame_cfg_t, tigger_mode),
+				offsetof(struct disp_frame_cfg_t, user));
+			print_hex_dump(KERN_INFO, "M95DBG head ", DUMP_PREFIX_OFFSET,
+				       16, 4, frame_cfg, 64, false);
+			print_hex_dump(KERN_INFO, "M95DBG tail ", DUMP_PREFIX_OFFSET,
+				       16, 4,
+				       (char *)frame_cfg +
+				       offsetof(struct disp_frame_cfg_t, overlap_layer_num) - 32,
+				       160, false);
+		}
 	}
 
 	frame_cfg->setter = SESSION_USER_HWC;
