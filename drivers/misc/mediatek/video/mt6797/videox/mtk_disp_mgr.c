@@ -1585,6 +1585,16 @@ long mtk_disp_mgr_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 	/* DISPMSG("mtk_disp_mgr_ioctl, cmd=%s, arg=0x%08x\n", _session_ioctl_spy(cmd), arg); */
 
+	/* M95DBG: log every command that reaches the dispatcher. The blob was
+	 * seen taking present fences and then never sending FRAME_CONFIG, and
+	 * never tripping the BUG() on the legacy primary path either, so the
+	 * only way to see what it actually calls - and where the per-frame
+	 * sequence stops - is to print the lot. nr and size are what matter:
+	 * size is the struct ABI, and a command missing from this list is one
+	 * the blob decided not to issue. */
+	pr_info_ratelimited("M95DBG ioctl: cmd=0x%08x nr=%u size=%u\n",
+			    cmd, _IOC_NR(cmd), _IOC_SIZE(cmd));
+
 	/* Queries whose struct grew in a later BSP - see _ioctl_widened(). */
 	if (_ioctl_widened_dispatch(cmd, arg, &ret))
 		return ret;
