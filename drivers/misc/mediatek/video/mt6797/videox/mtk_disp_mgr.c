@@ -1193,7 +1193,29 @@ static int __frame_config_trigger(struct disp_frame_cfg_t *frame_cfg)
 
 int _ioctl_frame_config(unsigned long arg)
 {
-	struct disp_frame_cfg_t *frame_cfg = kzalloc(sizeof(struct disp_frame_cfg_t), GFP_KERNEL);
+	struct disp_frame_cfg_t *frame_cfg;
+
+	/* These layouts are dictated by the vendor HWC blob, not by us, and
+	 * getting one wrong is not a subtle failure: an earlier attempt put the
+	 * widened members at the end of disp_input_config instead of in the
+	 * middle, which moved layer_id and layer_enable by 16 bytes and killed
+	 * the kernel before USB came up. Assert the offsets the blob actually
+	 * writes so a mistake stops the build instead of the device.
+	 * [FACT: DispDevice::frameConfig and updateOverlayInputs, verified
+	 * against the matching MTK BSP header.] */
+	BUILD_BUG_ON(sizeof(disp_input_config) != 120);
+	BUILD_BUG_ON(offsetof(disp_input_config, src_fence_fd) != 56);
+	BUILD_BUG_ON(offsetof(disp_input_config, layer_id) != 112);
+	BUILD_BUG_ON(offsetof(disp_input_config, layer_enable) != 113);
+	BUILD_BUG_ON(sizeof(disp_output_config) != 80);
+	BUILD_BUG_ON(sizeof(layer_config) != 28);
+	BUILD_BUG_ON(sizeof(struct disp_frame_cfg_t) != 1704);
+	BUILD_BUG_ON(offsetof(struct disp_frame_cfg_t, input_cfg) != 16);
+	BUILD_BUG_ON(offsetof(struct disp_frame_cfg_t, overlap_layer_num) != 1456);
+	BUILD_BUG_ON(offsetof(struct disp_frame_cfg_t, present_fence_idx) != 1676);
+	BUILD_BUG_ON(offsetof(struct disp_frame_cfg_t, tigger_mode) != 1696);
+
+	frame_cfg = kzalloc(sizeof(struct disp_frame_cfg_t), GFP_KERNEL);
 
 	if (frame_cfg == NULL) {
 		pr_err("error: kzalloc %zu memory fail!\n", sizeof(*frame_cfg));

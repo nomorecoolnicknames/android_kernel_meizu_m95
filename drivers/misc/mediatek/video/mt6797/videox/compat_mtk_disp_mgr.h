@@ -101,7 +101,7 @@ typedef struct compat_disp_session_input_config_t {
 	compat_uint_t setter;
 	compat_uint_t session_id;
 	compat_uint_t config_layer_num;
-	compat_disp_input_config config[8];
+	compat_disp_input_config config[12];
 } compat_disp_session_input_config;
 
 typedef struct compat_disp_present_fence_info_t {

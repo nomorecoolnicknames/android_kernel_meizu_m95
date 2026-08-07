@@ -218,6 +218,15 @@ typedef struct disp_input_config_t {
 
 	uint32_t next_buff_idx;
 
+	/* A later MTK BSP inserted these two HERE, not at the end - appending
+	 * them instead leaves layer_id and layer_enable 16 bytes short of where
+	 * the blob writes them, the driver reads a disabled layer's flags as
+	 * garbage, and the kernel dies before USB comes up. Learned the hard
+	 * way. [FACT: DispDevice::updateOverlayInputs stores the fence pair at
+	 * element+56 and the layer id at element+112.] */
+	uint32_t src_fence_fd;		/* -1 if invalid */
+	void *src_fence_struct;
+
 	uint32_t src_color_key;
 	uint32_t frm_sequence;
 
@@ -241,6 +250,7 @@ typedef struct disp_input_config_t {
 	uint8_t isTdshp;
 	uint8_t identity;
 	uint8_t connected_type;
+	int8_t ext_sel_layer;
 } disp_input_config;
 
 typedef struct disp_output_config_t {
@@ -256,6 +266,11 @@ typedef struct disp_output_config_t {
 	DISP_BUFFER_TYPE security;
 	unsigned int buff_idx;
 	unsigned int interface_idx;
+	/* Inserted by the same BSP revision, before frm_sequence. This is also
+	 * what makes sizeof(disp_session_output_config) 88, so FRAME_CONFIG
+	 * encodes as 0x40584FDC on its own. */
+	unsigned int src_fence_fd;
+	void *src_fence_struct;
 	unsigned int frm_sequence;
 } disp_output_config;
 
@@ -263,7 +278,7 @@ typedef struct disp_session_input_config_t {
 	DISP_SESSION_USER setter;
 	unsigned int session_id;
 	unsigned int config_layer_num;
-	disp_input_config config[8];
+	disp_input_config config[12];
 } disp_session_input_config;
 
 typedef struct disp_session_output_config_t {
@@ -282,7 +297,7 @@ struct disp_frame_cfg_t {
 
 	/* input config */
 	unsigned int input_layer_num;
-	disp_input_config input_cfg[8];
+	disp_input_config input_cfg[12];
 	unsigned int overlap_layer_num;
 
 	/* constant layer */
@@ -294,10 +309,12 @@ struct disp_frame_cfg_t {
 	disp_output_config output_cfg;
 
 	/* trigger config */
-	DISP_MODE mode;
-	unsigned int present_fence_idx;
-	EXTD_TRIGGER_MODE tigger_mode;
-	DISP_SESSION_USER user;
+	DISP_MODE mode;			/* 1672 */
+	unsigned int present_fence_idx;	/* 1676 - the field everything hangs on */
+	int prev_present_fence_fd;	/* 1680 */
+	void *prev_present_fence_struct;/* 1688 */
+	EXTD_TRIGGER_MODE tigger_mode;	/* 1696 */
+	DISP_SESSION_USER user;		/* 1700 */
 };
 
 typedef struct disp_session_info_t {
@@ -415,6 +432,10 @@ typedef struct layer_config_t {
 	DISP_FORMAT src_fmt;
 	unsigned int dst_offset_x, dst_offset_y;
 	unsigned int dst_width, dst_height;
+	/* 24 -> 28: fillLayerConfigList allocates n * 0x1c and strides by 0x1c,
+	 * writing this member at +24. Without it QUERY_VALID_LAYER reads
+	 * garbage from the second element onwards. */
+	int ext_sel_layer;
 } layer_config;
 
 typedef struct disp_layer_info_t {
