@@ -56,5 +56,6 @@ ged-y += \
 	src/ged_notify_sw_vsync.o \
 	src/ged_hashtable.o \
 	src/ged_thread.o \
-	src/ged_dvfs.o
+	src/ged_dvfs.o \
+	src/ged_ge.o
 

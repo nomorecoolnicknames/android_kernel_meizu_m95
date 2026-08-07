@@ -91,4 +91,14 @@ typedef enum GED_DVFS_VSYNC_OFFSET_SWITCH_CMD_TAG
 	GED_DVFS_BOOST_HOST_EVENT,
 } GED_DVFS_VSYNC_OFFSET_SWITCH_CMD;
 
+/*
+ * Base of any struct hung off struct file::private_data by a GED sub-feature.
+ * ged_release() calls free_func() blind, so every user must place this first
+ * in its own struct and fill free_func in before publishing the pointer.
+ * Currently only gralloc_extra (ged_ge.c) uses it.
+ */
+typedef struct GED_FILE_PRIVATE_BASE_TAG {
+	void (*free_func)(void *);
+} GED_FILE_PRIVATE_BASE;
+
 #endif
