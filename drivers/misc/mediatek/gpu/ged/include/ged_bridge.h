@@ -14,6 +14,15 @@
 #ifndef __GED_BRIDGE_H__
 #define __GED_BRIDGE_H__
 
+/* GED_IO/GED_IOW/GED_IOR/GED_IOWR below expand to _IO*(), so this header needs
+ * <linux/ioctl.h> to stand on its own. It never did; every pre-existing
+ * includer happened to pull the definitions in transitively, and the omission
+ * only surfaced when ged_ge.c started using the macros directly
+ * ("error: implicit declaration of function '_IOWR'"). Include it here rather
+ * than papering over it at each call site.
+ */
+#include <linux/ioctl.h>
+
 #include "ged_base.h"
 #include "ged_log.h"
 #include "ged_type.h"
