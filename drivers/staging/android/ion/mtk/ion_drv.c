@@ -665,6 +665,23 @@ static struct ion_platform_heap ion_drv_platform_heaps[] = {
 				.priv = NULL,
 		},
 		{
+				/*
+				 * m95: second MM-heap instance under the heap id the
+				 * Flyme camera blobs request via ion_alloc_camera()
+				 * (mask 1 << 12). ion_mm_heap_create() kzallocs per
+				 * call and ion_drv_create_heap() overrides heap->id
+				 * from this table, so a second instance is safe.
+				 * See comment in mtk_ion.h.
+				 */
+				.type = ION_HEAP_TYPE_MULTIMEDIA,
+				.id = ION_HEAP_TYPE_MULTIMEDIA_FOR_CAMERA,
+				.name = "ion_mm_heap_for_camera",
+				.base = 0,
+				.size = 0,
+				.align = 0,
+				.priv = NULL,
+		},
+		{
 				.type = ION_HEAP_TYPE_CARVEOUT,
 				.id = ION_HEAP_TYPE_CARVEOUT,
 				.name = "ion_carveout_heap",
@@ -698,6 +715,17 @@ static struct platform_device ion_device = {
 
 static int __init ion_init(void)
 {
+	/*
+	 * m95: lock the userspace ABI this table promises. libion_mtk.so
+	 * ion_alloc_mm() passes mask 0x400, ion_alloc_camera() 0x1000
+	 * (blob disassembly); the ids below must stay 10 and 12 or the
+	 * camera/codec blobs silently lose their heaps again.
+	 */
+	BUILD_BUG_ON(ION_HEAP_TYPE_MULTIMEDIA != 10);
+	BUILD_BUG_ON(ION_HEAP_TYPE_MULTIMEDIA_FOR_CAMERA != 12);
+	BUILD_BUG_ON(ION_HEAP_MULTIMEDIA_MASK != 0x400);
+	BUILD_BUG_ON(ION_HEAP_CAMERA_MASK != 0x1000);
+
 	IONMSG("ion_init()\n");
 	if (platform_device_register(&ion_device)) {
 		IONMSG("%s platform device register failed.\n", __func__);
