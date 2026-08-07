@@ -1592,8 +1592,8 @@ long mtk_disp_mgr_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	 * sequence stops - is to print the lot. nr and size are what matter:
 	 * size is the struct ABI, and a command missing from this list is one
 	 * the blob decided not to issue. */
-	pr_info_ratelimited("M95DBG ioctl: cmd=0x%08x nr=%u size=%u\n",
-			    cmd, _IOC_NR(cmd), _IOC_SIZE(cmd));
+	pr_info("M95DBG ioctl: cmd=0x%08x nr=%u size=%u\n",
+		cmd, _IOC_NR(cmd), _IOC_SIZE(cmd));
 
 	/* Queries whose struct grew in a later BSP - see _ioctl_widened(). */
 	if (_ioctl_widened_dispatch(cmd, arg, &ret))
