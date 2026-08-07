@@ -415,6 +415,11 @@ int _ioctl_prepare_present_fence(unsigned long arg)
 
 	preset_fence_struct.present_fence_fd = data.fence;
 	preset_fence_struct.present_fence_index = data.value;
+	/* M95DBG: pairs with the frame_cfg print - the index handed out here is
+	 * what the blob is supposed to send back in disp_frame_cfg_t. */
+	pr_info_ratelimited("M95DBG present_fence create: idx=%u fd=%d\n",
+			    preset_fence_struct.present_fence_index,
+			    preset_fence_struct.present_fence_fd);
 	if (copy_to_user(argp, &preset_fence_struct, sizeof(preset_fence_struct))) {
 		pr_err("[FB Driver]: copy_to_user failed! line:%d\n", __LINE__);
 		ret = -EFAULT;

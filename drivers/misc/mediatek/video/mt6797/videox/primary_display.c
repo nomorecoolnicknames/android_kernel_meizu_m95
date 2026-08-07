@@ -4984,6 +4984,16 @@ int primary_display_frame_cfg(struct disp_frame_cfg_t *cfg)
 		dprec_start(trigger_event, proc_name, 0);
 	}
 
+	/* M95DBG: the whole black screen hinges on this one condition. If the
+	 * blob leaves present_fence_idx at -1, or the field lands at a
+	 * different offset because disp_frame_cfg_t drifted between BSPs, the
+	 * present-fence worker is never woken, the timeline never advances, the
+	 * fence never signals, and surfaceflinger's frameMissed gate stops
+	 * latching. Print what actually arrives. */
+	pr_info_ratelimited("M95DBG frame_cfg: sess=0x%x in=%u out=%d mode=%d pfidx=%d setter=%d\n",
+			    cfg->session_id, cfg->input_layer_num, cfg->output_en,
+			    cfg->mode, (int)cfg->present_fence_idx, cfg->setter);
+
 	if (cfg->present_fence_idx != (unsigned int)-1)
 		primary_display_update_present_fence(cfg->present_fence_idx);
 
