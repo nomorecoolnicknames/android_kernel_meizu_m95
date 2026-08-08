@@ -12,6 +12,7 @@
  */
 
 #include <linux/slab.h>
+#include <linux/ratelimit.h>
 #include <linux/sched.h>   /* current->pid / current->comm, M95GE trace */
 #include <linux/mutex.h>
 #include <linux/seq_file.h>
@@ -44,6 +45,15 @@ static struct kmem_cache *gPoolCache;
 static uint16_t gver = 1;
 static GEEntry *gPoolEntry[GE_POOL_ENTRY_SIZE];
 static DEFINE_MUTEX(gPoolMutex);
+
+/* Userspace hands back stale handles as a matter of course - gralloc ignores
+ * the result of ge_retain and imports the buffer regardless, and the stock
+ * kernel for this device had no GE implementation at all, so the blobs are
+ * built to tolerate every GE call failing. An untrottled print here cost 1295
+ * lines in a single boot before the lifetime bugs were fixed, which is real
+ * boot time spent in printk.
+ */
+static DEFINE_RATELIMIT_STATE(gLookupFailRL, 5 * HZ, 10);
 
 static struct dentry *gDFSEntry;
 
@@ -353,13 +363,57 @@ int ged_ge_init_context(void **pbase)
  *  pool
  *****************************************************************************/
 
+static void _ged_ge_free_entry(GEEntry *entry);
+
+/* caller must hold gPoolMutex
+ *
+ * Round-robin rather than first-fit, and willing to recycle a slot whose entry
+ * nobody holds a reference to any more.
+ *
+ * Both parts are needed because ged_ge_release() no longer destroys entries
+ * (see the comment there). Something has to reclaim them, and closing the fd
+ * does not: libged caches its bridge fd in a process global and never closes
+ * it, so the allocator, SurfaceFlinger and the composer keep theirs for the
+ * lifetime of the system. One boot was measured issuing 1295 allocations
+ * against a 1024 slot pool, so without reuse the pool runs dry before the
+ * device finishes booting.
+ *
+ * First-fit made that worse in a subtler way: it always hands back the lowest
+ * free slot, so slot 0 gets recycled the instant it becomes reclaimable and
+ * races any import of the previous slot-0 buffer still in flight. That is
+ * exactly the 0x400 / 0xc00 signature this driver was failing on. A rotating
+ * cursor costs nothing and gives every dead entry the whole pool to live out
+ * before its slot comes round again.
+ */
 static int _get_unused_idx(void)
 {
-	int i;
+	static int cursor;
+	int i, idx;
 
+	/* First pass: a genuinely empty slot, starting where we left off. */
 	for (i = 0; i < GE_POOL_ENTRY_SIZE; ++i) {
-		if (gPoolEntry[i] == NULL)
-			return i;
+		idx = (cursor + i) % GE_POOL_ENTRY_SIZE;
+		if (gPoolEntry[idx] == NULL) {
+			cursor = (idx + 1) % GE_POOL_ENTRY_SIZE;
+			return idx;
+		}
+	}
+
+	/* Second pass: the pool is full, so take the first slot whose entry has
+	 * been released by everyone. The version in the handle keeps a stale user
+	 * of the old buffer from addressing the new one - it will get a clean
+	 * lookup failure rather than another buffer's data.
+	 */
+	for (i = 0; i < GE_POOL_ENTRY_SIZE; ++i) {
+		idx = (cursor + i) % GE_POOL_ENTRY_SIZE;
+		if (gPoolEntry[idx] && gPoolEntry[idx]->ref <= 0) {
+			GEEntry *dead = gPoolEntry[idx];
+
+			gPoolEntry[idx] = NULL;
+			_ged_ge_free_entry(dead);
+			cursor = (idx + 1) % GE_POOL_ENTRY_SIZE;
+			return idx;
+		}
 	}
 
 	return -1;
@@ -502,16 +556,37 @@ int32_t ged_ge_release(uint32_t ge_hnd)
 	}
 
 	old_ref = entry->ref;
-	entry->ref -= 1;
-	if (old_ref == 1) {
-		/* remove from pool first */
-		gPoolEntry[GE_GEHND2IDX(ge_hnd)] = NULL;
-	}
+	if (entry->ref > 0)
+		entry->ref -= 1;
+
+	/* Deliberately does NOT free the entry when the count reaches zero.
+	 *
+	 * Measured on hardware: userspace allocates a handle, releases it almost
+	 * immediately, and then keeps reading and writing that same handle for the
+	 * rest of the boot. Over one boot, with alloc/free/failure all traced:
+	 *
+	 *   3 allocations, 3 releases, 3 entries destroyed,
+	 *   and 4790 subsequent lookups that failed because of it -
+	 *   zero retain failures and zero release failures, so RETAIN is never
+	 *   called and the release is the only thing consuming the reference.
+	 *
+	 * The consumers were the composer and BootAnimation, both spinning on the
+	 * retry, which is what pinned a core at 77-81%, held the SoC at 76 C and
+	 * starved system_server until the device could not finish booting.
+	 *
+	 * So on this stack a release is not a destroy: the entry has to outlive it,
+	 * because the graphic buffer it describes does. Reclamation happens when
+	 * the processes that used it exit (the per-file table below) or when the
+	 * pool slot is reused.
+	 *
+	 * This is derived from the observed behaviour of the vendor stack, not from
+	 * a specification, so the cost is stated plainly: an entry whose users all
+	 * vanish without closing their fd stays until its slot is recycled. The
+	 * pool is GE_POOL_ENTRY_SIZE (1024) slots and allocation failure is already
+	 * logged, so exhaustion would be visible rather than silent.
+	 */
 
 	mutex_unlock(&gPoolMutex);
-
-	if (old_ref == 1)
-		_ged_ge_free_entry(entry);
 
 	return old_ref;
 }
@@ -555,7 +630,11 @@ int ged_ge_get(uint32_t ge_hnd, int region_id, int u32_offset, int u32_size,
 	entry = _gehnd2entry(ge_hnd);
 	if (!entry) {
 		mutex_unlock(&gPoolMutex);
-		GE_PERR("M95GE lookup FAIL hnd=0x%x idx=%d ver=%d pid=%d(%s)\n", ge_hnd, GE_GEHND2IDX(ge_hnd), GE_GEHND2VER(ge_hnd), current->pid, current->comm);
+		if (__ratelimit(&gLookupFailRL))
+			GE_PERR("lookup FAIL hnd=0x%x idx=%d ver=%d pid=%d(%s)\n",
+					ge_hnd, GE_GEHND2IDX(ge_hnd),
+					GE_GEHND2VER(ge_hnd),
+					current->pid, current->comm);
 		return -1;
 	}
 
@@ -595,7 +674,11 @@ int ged_ge_set(uint32_t ge_hnd, int region_id, int u32_offset, int u32_size,
 	entry = _gehnd2entry(ge_hnd);
 	if (!entry) {
 		mutex_unlock(&gPoolMutex);
-		GE_PERR("M95GE lookup FAIL hnd=0x%x idx=%d ver=%d pid=%d(%s)\n", ge_hnd, GE_GEHND2IDX(ge_hnd), GE_GEHND2VER(ge_hnd), current->pid, current->comm);
+		if (__ratelimit(&gLookupFailRL))
+			GE_PERR("lookup FAIL hnd=0x%x idx=%d ver=%d pid=%d(%s)\n",
+					ge_hnd, GE_GEHND2IDX(ge_hnd),
+					GE_GEHND2VER(ge_hnd),
+					current->pid, current->comm);
 		return -1;
 	}
 
