@@ -63,9 +63,13 @@ void qmu_done_tx(struct musb *musb, u8 ep_num, unsigned long flags)
 	}
 
 	if (TGPD_IS_FLAGS_HWO(gpd)) {
-		qmu_printk(K_DEBUG, "[TXD]" "%s HWO=1, CPR=%x\n", __func__,
-			   os_readl(USB_QMU_TQCPR(ep_num)));
-		BUG_ON(1);
+		/* Was BUG_ON(1). A QMU desync must not kill the phone - see the
+		 * comment on the same condition in qmu_done_rx() below.
+		 */
+		if (__ratelimit(&ratelimit_tx))
+			qmu_printk(K_ERR, "[TXD][ERROR]" "%s HWO=1, CPR=%x - queue desync, dropping\n",
+				   __func__, os_readl(USB_QMU_TQCPR(ep_num)));
+		return;
 	}
 
 	while (gpd != gpd_current && !TGPD_IS_FLAGS_HWO(gpd)) {
@@ -231,8 +235,34 @@ void qmu_done_rx(struct musb *musb, u8 ep_num, unsigned long flags)
 	}
 
 	if (TGPD_IS_FLAGS_HWO(gpd)) {
-		qmu_printk(K_ERR, "[RXD][ERROR]" "HWO=1!!\n");
-		BUG_ON(1);
+		/* The head GPD still belongs to the hardware while the completion
+		 * handler is running, i.e. the queue is out of sync with the QMU.
+		 *
+		 * This used to be BUG_ON(1), and on this device that means the phone
+		 * reboots in the middle of a USB transfer. Proven, not theorised: the
+		 * Flyme recovery kernel - which carries this identical code - left a
+		 * kernel exception in expdb, archived as
+		 * captures/m95-usb-panic-20260808/expdb-recovery-usb-panic.bin:
+		 *
+		 *   [U3D][Q][RXD][ERROR]HWO=1!!
+		 *   BUG: failure at .../mu3d/drv/ssusb_qmu.c:267/qmu_done_rx()!
+		 *   PC is at qmu_done_rx+0x380/0x74c
+		 *   CPU: 0 PID: 485 Comm: <-transport   3.18.41+
+		 *
+		 * "<-transport" is adbd's host-to-device thread, so every large adb
+		 * push during bring-up risked taking the device down - which is
+		 * exactly what kept happening, and what was long misread as a dying
+		 * USB link.
+		 *
+		 * A desync is recoverable: bail out and let the disconnect/flush path
+		 * rebuild the queues. The driver already treats the milder desync a
+		 * few lines above the same way (plain return), and one of the BUG_ON
+		 * calls in qmu_done_tx() was already replaced with a break by its own
+		 * authors, so this is the file's own idiom rather than a new policy.
+		 */
+		if (__ratelimit(&ratelimit_rx))
+			qmu_printk(K_ERR, "[RXD][ERROR]" "HWO=1 - queue desync, dropping\n");
+		return;
 	}
 
 	while (gpd != gpd_current && !TGPD_IS_FLAGS_HWO(gpd)) {
@@ -251,9 +281,15 @@ void qmu_done_rx(struct musb *musb, u8 ep_num, unsigned long flags)
 		request->actual += rcv_len;
 
 		if (!TGPD_GET_NEXT(gpd) || !TGPD_GET_DATA(gpd)) {
-			qmu_printk(K_ERR, "[RXD][ERROR]" "%s EP%d ,gpd=%p\n", __func__, ep_num,
-				   gpd);
-			BUG_ON(1);
+			/* Was BUG_ON(1). Truncated chain: stop walking it. gpd is still
+			 * valid here, so the diagnostic block after the loop can report
+			 * the queue state. Mirrors what qmu_done_tx() already does for
+			 * its own "Next GPD is null" case.
+			 */
+			if (__ratelimit(&ratelimit_rx))
+				qmu_printk(K_ERR, "[RXD][ERROR]" "%s EP%d gpd=%p - chain truncated\n",
+					   __func__, ep_num, gpd);
+			break;
 		}
 
 		gpd = TGPD_GET_NEXT(gpd);
@@ -261,9 +297,14 @@ void qmu_done_rx(struct musb *musb, u8 ep_num, unsigned long flags)
 		gpd = gpd_phys_to_virt(gpd, USB_RX, ep_num);
 
 		if (!gpd) {
-			qmu_printk(K_ERR, "[RXD][ERROR]" "%s EP%d ,gpd=%p\n", __func__, ep_num,
-				   gpd);
-			BUG_ON(1);
+			/* Was BUG_ON(1). Unmappable GPD address - must return rather than
+			 * break, because the diagnostic block after the loop dereferences
+			 * gpd.
+			 */
+			if (__ratelimit(&ratelimit_rx))
+				qmu_printk(K_ERR, "[RXD][ERROR]" "%s EP%d gpd=NULL - unmappable, dropping\n",
+					   __func__, ep_num);
+			return;
 		}
 
 		Rx_gpd_last[ep_num] = gpd;
