@@ -193,14 +193,31 @@ static void ged_track_ge_refs(struct file *pFile, unsigned int bridge_id,
 {
 	switch (bridge_id) {
 	case GED_BRIDGE_COMMAND_GE_ALLOC:
-	{
-		GED_BRIDGE_OUT_GE_ALLOC *out = pvOut;
-
-		if (out->eError == GED_OK &&
-		    ged_ge_init_context(&pFile->private_data) == 0)
-			ged_ge_context_ref(pFile->private_data, out->ge_hnd);
+		/* Deliberately NOT tracked against the creating file.
+		 *
+		 * A gralloc_extra handle belongs to a graphic buffer, and that buffer
+		 * outlives the fd used to create it and is shared with other
+		 * processes. Charging the ALLOC reference to the creating file made
+		 * the entry die the moment that fd closed. Traced on hardware:
+		 *
+		 *   M95GE alloc  hnd=0x400 ver=1 regions=5 pid=374(allocator@2.0-s)
+		 *   M95GE free   ver=1 ref=0              pid=374(allocator@2.0-s)
+		 *   M95GE retain FAIL hnd=0x400           pid=537(Binder:399_1)
+		 *   M95GE lookup FAIL hnd=0x400           pid=662(BootAnimation)
+		 *
+		 * 0.6 ms between allocating the handle and destroying it, in the
+		 * allocator HAL itself, after which every real user of the buffer got
+		 * "ge_hnd invalid". The composer then retried on every single buffer
+		 * operation and sat at 81% CPU, which heated the SoC to 76 C, made the
+		 * thermal governor park cores, and starved system_server until init
+		 * killed it - the device never finished booting because of this.
+		 *
+		 * So the ALLOC reference is owned by the handle and is dropped only by
+		 * an explicit GE_RELEASE, which is what gralloc issues when the buffer
+		 * is destroyed. The per-file table below still covers RETAIN, so a
+		 * client that crashes after retaining does not leak its reference.
+		 */
 		break;
-	}
 	case GED_BRIDGE_COMMAND_GE_RETAIN:
 	{
 		GED_BRIDGE_IN_GE_RETAIN *in = pvInt;
