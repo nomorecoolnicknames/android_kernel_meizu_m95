@@ -84,6 +84,35 @@ typedef struct cmdqWriteAddressStruct {
 /*  */
 #define CMDQ_IOCTL_QUERY_DTS _IOW(CMDQ_IOCTL_MAGIC_NUMBER, 11, cmdqDTSDataStruct)
 
+/*
+ * ABI shim for the Flyme MDP blob (libdpframework.so, 32- and 64-bit).
+ *
+ * _IOW encodes sizeof() into the ioctl number, so a struct whose layout
+ * differs between kernel and userspace produces a code the switch below can
+ * never match. That is the case here: the blob was built against a BSP with
+ * 38 GCE subsys slots, ours has 27.
+ *
+ *   blob asks for 0x4E88780B  (size 3720 = 4*511 + 44*38 + 4*1)
+ *   we implement 0x4CA4780B  (size 3236 = 4*511 + 44*27 + 4*1)
+ *
+ * The immediate the blob loads before its ioctl call is identical in both
+ * bitnesses (32-bit at libdpframework.so:0x1eab8 "movw r1,#0x780b;
+ * movt r1,#0x4e88"; 64-bit at :0x2a134 "mov w1,#0x4E880000; movk w1,#0x780b").
+ * eventTable, SubsysStruct and the single MDP PA base are the same on both
+ * sides - only the subsys array is longer - so we can serve the blob's layout
+ * directly and mark the slots we do not have as invalid.
+ *
+ * Same shape as the display frame-config fix: accept the blob's struct rather
+ * than pretend our header is the contract.
+ */
+#define CMDQ_SUBSYS_COUNT_BLOB 38
+typedef struct cmdqDTSDataBlobStruct {
+	int32_t eventTable[CMDQ_SYNC_TOKEN_MAX];
+	SubsysStruct subsys[CMDQ_SUBSYS_COUNT_BLOB];
+	uint32_t MDPBaseAddress[CMDQ_MAX_MDP_PA_BASE_COUNT];
+} cmdqDTSDataBlobStruct;
+#define CMDQ_IOCTL_QUERY_DTS_BLOB _IOW(CMDQ_IOCTL_MAGIC_NUMBER, 11, cmdqDTSDataBlobStruct)
+
 /*  */
 /* Notify MDP will use specified engine before really use. */
 /* input int is same as EngineFlag. */
