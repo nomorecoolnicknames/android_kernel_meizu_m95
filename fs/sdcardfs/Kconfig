@@ -11,3 +11,33 @@ config SDCARD_FS_FADV_NOACTIVE
 	default y
 	help
 	  Sdcardfs supports fadvise noactive mode.
+
+# Kept for MediaTek's ext4/f2fs, not for sdcardfs itself.
+#
+# The MTK BSP patches case-insensitive lookup into fs/ext4 and fs/f2fs behind
+# CONFIG_SDCARD_FS_CI_SEARCH (7 files: ext4/namei.c, ext4/inline.c, ext4.h,
+# f2fs/namei.c, f2fs/dir.c, f2fs/recovery.c, f2fs.h). The symbol used to be
+# defined by Samsung's sdcardfs Kconfig, which was replaced wholesale with
+# AOSP's - and AOSP's sdcardfs does no case-insensitive lookup, so the symbol
+# vanished with it and those blocks compiled out. That is a behaviour change to
+# ext4/f2fs we did not ask for, and it broke the build immediately:
+#   fs/ext4/namei.c:1295: error: unused variable 'namelen' [-Werror]
+# because ext4_search_dir declares name/namelen solely for that branch.
+#
+# The blocks are self-contained - ext4_ci_match is a static inline in
+# ext4/namei.c and nothing in ext4 or f2fs calls into sdcardfs - so defining
+# the symbols here keeps those filesystems compiling exactly as before while
+# the new sdcardfs simply never uses the case-insensitive entry points.
+config SDCARD_FS_CI_SEARCH
+	bool "MTK ext4/f2fs case-insensitive lookup support"
+	default y
+	help
+	  Gates MediaTek's case-insensitive directory search in ext4 and f2fs.
+	  Nothing in sdcardfs uses it; it lives here only because that is where
+	  the ext4/f2fs code expects the symbol to be defined.
+
+config SDCARD_FS_XATTR
+	bool "MTK ext4/f2fs sdcardfs xattr support"
+	default y
+	help
+	  Companion of SDCARD_FS_CI_SEARCH, same rationale.
