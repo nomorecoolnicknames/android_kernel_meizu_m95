@@ -35,6 +35,33 @@ enum {
 	Opt_split,
 	Opt_lower_fs,
 	Opt_reserved_mb,
+	/*
+	 * Option names used by the Android P (and later) sdcard daemon. This
+	 * sdcardfs is 2.1.3, from before the option ABI was renamed, so
+	 * without these every mount from userspace fails outright:
+	 *
+	 *   W sdcard: Failed to mount sdcardfs with options fsuid=1023,
+	 *             fsgid=1023,multiuser,derive_gid,default_normal,mask=6,
+	 *             userid=0,gid=1015: Invalid argument
+	 *   F sdcard: sdcard.cpp:176] failed to sdcardfs_setup
+	 *
+	 * and /sdcard never appears. The daemon retries with fewer options
+	 * three more times, down to fsuid,fsgid,mask,userid,gid - so it is the
+	 * naming, not any single feature, that has to be accepted.
+	 *
+	 * Switching the daemon to another backend is not available: its only
+	 * alternative is esdfs, which this kernel does not have, and
+	 * should_use_sdcardfs() returns !supports_esdfs() in that branch - so
+	 * ro.sys.sdcardfs=false still lands back on sdcardfs.
+	 */
+	Opt_fsuid,
+	Opt_fsgid,
+	Opt_userid,
+	Opt_multiuser,
+	Opt_gid_derivation,
+	Opt_default_normal,
+	Opt_unshared_obb,
+	Opt_nocache,
 	Opt_err,
 };
 
@@ -48,6 +75,15 @@ static const match_table_t sdcardfs_tokens = {
 	{Opt_split, "split"},
 	{Opt_lower_fs, "lower_fs=%s"},
 	{Opt_reserved_mb, "reserved_mb=%u"},
+	/* Android P names - see the enum above. */
+	{Opt_fsuid, "fsuid=%u"},
+	{Opt_fsgid, "fsgid=%u"},
+	{Opt_userid, "userid=%d"},
+	{Opt_multiuser, "multiuser"},
+	{Opt_gid_derivation, "derive_gid"},
+	{Opt_default_normal, "default_normal"},
+	{Opt_unshared_obb, "unshared_obb"},
+	{Opt_nocache, "nocache"},
 	{Opt_err, NULL}
 };
 
@@ -58,6 +94,16 @@ static int parse_options(struct super_block *sb, char *options, int silent,
 	substring_t args[MAX_OPT_ARGS];
 	int option;
 	char *string_option;
+	/*
+	 * "gid=" means different things in the two option ABIs: here it has
+	 * always been the lower filesystem's gid, but Android P uses it for
+	 * the access gid this mount grants (AID_SDCARD_RW or AID_EVERYBODY)
+	 * and passes the lower one as "fsgid=". The daemon always emits fsgid
+	 * before gid, so seeing fsgid is a reliable signal that we are being
+	 * called by the new userspace and gid should go to write_gid instead.
+	 * Old callers, which send gid= alone, keep their original meaning.
+	 */
+	int saw_fsgid = 0;
 
 	/* by default, we use AID_MEDIA_RW as uid, gid */
 	opts->fs_low_uid = AID_MEDIA_RW;
@@ -98,7 +144,10 @@ static int parse_options(struct super_block *sb, char *options, int silent,
 		case Opt_gid:
 			if (match_int(&args[0], &option))
 				return 0;
-			opts->fs_low_gid = option;
+			if (saw_fsgid)
+				opts->write_gid = option;
+			else
+				opts->fs_low_gid = option;
 			break;
 		case Opt_wgid:
 			if (match_int(&args[0], &option))
@@ -136,6 +185,52 @@ static int parse_options(struct super_block *sb, char *options, int silent,
 			if (match_int(&args[0], &option))
 				return 0;
 			opts->reserved_mb = option;
+			break;
+
+		/*
+		 * Android P option names. The first three carry values this
+		 * sdcardfs already has fields for; the rest are flags that
+		 * refine behaviour we do not implement, and are accepted so
+		 * the mount succeeds rather than rejected so it fails.
+		 */
+		case Opt_fsuid:
+			if (match_int(&args[0], &option))
+				return 0;
+			opts->fs_low_uid = option;
+			break;
+		case Opt_fsgid:
+			if (match_int(&args[0], &option))
+				return 0;
+			opts->fs_low_gid = option;
+			saw_fsgid = 1;
+			break;
+		case Opt_multiuser:
+			/* valueless spelling of multi_user=1 */
+			opts->multi_user = 1;
+			break;
+		case Opt_userid:
+			/*
+			 * Per-user mount id. 2.1.3 derives the user from the
+			 * path under /data/media rather than from an option,
+			 * so there is no field to store this in; accepted and
+			 * ignored. Correct for userid 0, which is the only one
+			 * a single-user device mounts.
+			 */
+			if (match_int(&args[0], &option))
+				return 0;
+			break;
+		case Opt_gid_derivation:
+		case Opt_default_normal:
+		case Opt_unshared_obb:
+		case Opt_nocache:
+			/*
+			 * Later-sdcardfs refinements: derive_gid changes how
+			 * the gid of new nodes is chosen, default_normal how
+			 * the "default" view is masked, unshared_obb splits
+			 * the obb mount, nocache disables dentry caching.
+			 * 2.1.3 predates all four and keeps its own behaviour,
+			 * which is what stock Flyme ran on this device.
+			 */
 			break;
 		/* unknown option */
 		default:
