@@ -998,7 +998,11 @@ int dcm_mcusys_sync_dcm(ENUM_MCUSYS_DCM on)
 
 int dcm_mcusys_mp2_sync_dcm(ENUM_MCUSYS_DCM on)
 {
-	dcm_info("%s(%d)\n", __func__, on);
+	/* M95 log hygiene: called on every cluster-2 power transition, was
+	 * ~340 pr_warn lines/min of pure function-entry trace (2026-08-09
+	 * dmesg audit). The other dcm_info entry traces in this file fire
+	 * rarely and are left as shipped. */
+	dcm_dbg("%s(%d)\n", __func__, on);
 
 	if (on == MCUSYS_DCM_ON) {
 

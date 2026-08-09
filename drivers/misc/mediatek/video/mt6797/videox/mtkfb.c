@@ -2306,12 +2306,12 @@ static int _parse_tag_videolfb(void)
 
 found:
 	is_videofb_parse_done = 1;
-	pr_info("M95DBG [DT][videolfb] islcmfound = %d\n", islcmconnected);
-	pr_info("M95DBG [DT][videolfb] is_lcm_inited = %d\n", is_lcm_inited);
-	pr_info("M95DBG [DT][videolfb] fps        = %d\n", lcd_fps);
-	pr_info("M95DBG [DT][videolfb] fb_base    = 0x%lx\n", (unsigned long)fb_base);
-	pr_info("M95DBG [DT][videolfb] vram       = 0x%x (%d)\n", vramsize, vramsize);
-	pr_info("M95DBG [DT][videolfb] lcmname    = %s\n", mtkfb_lcm_name);
+	/* One line, once, at probe: the LK handover values every later display
+	 * decision is derived from. Keep it - a wrong lcmname or a zero vram
+	 * here is the first symptom of a bad boot. */
+	pr_info("[DT][videolfb] lcm=%s found=%d inited=%d fps=%d fb_base=0x%lx vram=0x%x\n",
+		mtkfb_lcm_name, islcmconnected, is_lcm_inited, lcd_fps,
+		(unsigned long)fb_base, vramsize);
 	return 0;
 }
 
@@ -2429,12 +2429,7 @@ static int mtkfb_probe(struct device *dev)
 	struct platform_device *pdev;
 	long dts_gpio_state = 0;
 
-	pr_info("M95DBG mtkfb_probe enter\n");
-
 	_parse_tag_videolfb();
-
-	pr_info("M95DBG mtkfb_probe after videolfb: is_lcm_inited=%d lcmname=%s lcd_fps=%d\n",
-		is_lcm_inited, mtkfb_lcm_name, lcd_fps);
 
 	init_state = 0;
 
@@ -2464,10 +2459,10 @@ static int mtkfb_probe(struct device *dev)
 	fbdev->fb_pa_base = fb_base;
 
 	primary_display_set_frame_buffer_address((unsigned long)(fbdev->fb_va_base), fb_pa);
-	pr_info("M95DBG mtkfb_probe calling primary_display_init lcm=%s inited=%d\n",
-		mtkfb_find_lcm_driver(), is_lcm_inited);
 	r = primary_display_init(mtkfb_find_lcm_driver(), lcd_fps, is_lcm_inited);
-	pr_info("M95DBG mtkfb_probe primary_display_init ret=%d\n", r);
+	if (r)
+		pr_err("mtkfb: primary_display_init(%s, inited=%d) failed: %d\n",
+		       mtkfb_find_lcm_driver(), is_lcm_inited, r);
 
 	init_state++;		/* 1 */
 	MTK_FB_XRES = DISP_GetScreenWidth();
@@ -2542,7 +2537,7 @@ static int mtkfb_probe(struct device *dev)
 
 	fbdev->state = MTKFB_ACTIVE;
 
-	pr_info("M95DBG mtkfb_probe SUCCESS: xres=%d yres=%d bpp=%d\n",
+	pr_info("mtkfb: probe ok, xres=%d yres=%d bpp=%d\n",
 		MTK_FB_XRES, MTK_FB_YRES, MTK_FB_BPP);
 	MSG_FUNC_LEAVE();
 	return 0;

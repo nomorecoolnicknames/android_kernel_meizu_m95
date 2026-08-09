@@ -646,7 +646,10 @@ void bq2589x_charge_dump_register(void)
 	for (i=0;i<BQ2589x_REG_NUM;i++)
 	{
 		bq2589x_read_byte(&regval, i);
-		printk("[bq2589x_dump_register_main] Reg[0x%X]=0x%X\n", i, regval);        
+		/* M95 log hygiene: bat_thread dumps the full register file
+		 * every cycle - ~40 default-level lines/min at idle
+		 * (2026-08-09 dmesg audit). */
+		pr_debug("[bq2589x_dump_register_main] Reg[0x%X]=0x%X\n", i, regval);
 	}
 
 	if (g_bq_sed)
@@ -654,7 +657,7 @@ void bq2589x_charge_dump_register(void)
 	for (i=0;i<BQ2589x_REG_NUM;i++)
 	{
 		bq2589x_sed_read_byte(&regval, i);
-		printk("[bq2589x_dump_register_sed] Reg[0x%X]=0x%X\n", i, regval);        
+		pr_debug("[bq2589x_dump_register_sed] Reg[0x%X]=0x%X\n", i, regval);
 	}
 }
 

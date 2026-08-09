@@ -124,7 +124,13 @@ static int fts_esd_protection_timeout(void *unused)
 	{
 		wait_event_interruptible_timeout(esd_protection_waiter, 0, uljiffies);
 		if(0 == g_start_esd_protection) {
-			TPD_DMESG("%s: g_start_esd_protection = 0 \n", __func__);
+			/* M95 log hygiene: this is the normal idle state of the
+			 * watchdog - the panel is suspended and the check is
+			 * paused - yet TPD_DMESG printed it at KERN_EMERG every
+			 * 2 s for as long as the screen was off (126 lines in a
+			 * 254 s dmesg window, 2026-08-09 audit). Trace it the
+			 * same way this file traces suspend/resume. */
+			TPD_DEBUG("%s: g_start_esd_protection = 0 \n", __func__);
 			continue;
 		}
 

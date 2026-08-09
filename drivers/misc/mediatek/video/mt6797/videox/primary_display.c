@@ -3114,12 +3114,6 @@ int primary_display_init(char *lcm_name, unsigned int lcm_fps, int is_lcm_inited
 
 	pgc->plcm = disp_lcm_probe(lcm_name, LCM_INTERFACE_NOTDEFINED, is_lcm_inited);
 
-	pr_info("M95DBG primary_display_init: disp_lcm_probe(%s, %d) -> plcm=%p\n",
-		lcm_name ? lcm_name : "NULL", is_lcm_inited, pgc->plcm);
-	if (pgc->plcm)
-		pr_info("M95DBG primary_display_init: plcm->is_inited=%d if_id=%d drv=%p params=%p\n",
-			pgc->plcm->is_inited, pgc->plcm->lcm_if_id, pgc->plcm->drv, pgc->plcm->params);
-
 	if (pgc->plcm == NULL) {
 		DISPDBG("disp_lcm_probe returns null\n");
 		ret = DISP_STATUS_ERROR;
@@ -3283,8 +3277,9 @@ int primary_display_init(char *lcm_name, unsigned int lcm_fps, int is_lcm_inited
 		if (primary_display_is_video_mode())
 			dpmgr_path_trigger(pgc->dpmgr_handle, NULL, 0);
 	}
-	pr_info("M95DBG primary_display_init: disp_lcm_init(force=%d) ret=%d\n",
-		is_lcm_inited ? 0 : 1, ret);
+	if (ret)
+		pr_err("primary_display_init: disp_lcm_init(force=%d) failed: %d\n",
+		       is_lcm_inited ? 0 : 1, ret);
 
 	set_enterulps(0);
 
@@ -4984,16 +4979,13 @@ int primary_display_frame_cfg(struct disp_frame_cfg_t *cfg)
 		dprec_start(trigger_event, proc_name, 0);
 	}
 
-	/* M95DBG: the whole black screen hinges on this one condition. If the
-	 * blob leaves present_fence_idx at -1, or the field lands at a
-	 * different offset because disp_frame_cfg_t drifted between BSPs, the
-	 * present-fence worker is never woken, the timeline never advances, the
-	 * fence never signals, and surfaceflinger's frameMissed gate stops
-	 * latching. Print what actually arrives. */
-	pr_info_ratelimited("M95DBG frame_cfg: sess=0x%x in=%u out=%d mode=%d pfidx=%d setter=%d\n",
-			    cfg->session_id, cfg->input_layer_num, cfg->output_en,
-			    cfg->mode, (int)cfg->present_fence_idx, cfg->setter);
-
+	/* The whole black screen hung on this one condition: if the blob leaves
+	 * present_fence_idx at -1, or the field lands at a different offset
+	 * because disp_frame_cfg_t drifted between BSPs, the present-fence
+	 * worker is never woken, the timeline never advances, the fence never
+	 * signals, and surfaceflinger's frameMissed gate stops latching. The
+	 * offset is now locked by the BUILD_BUG_ON block in
+	 * mtk_disp_mgr.c:_ioctl_frame_config(). */
 	if (cfg->present_fence_idx != (unsigned int)-1)
 		primary_display_update_present_fence(cfg->present_fence_idx);
 

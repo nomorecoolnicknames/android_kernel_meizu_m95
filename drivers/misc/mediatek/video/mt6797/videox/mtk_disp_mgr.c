@@ -416,11 +416,6 @@ int _ioctl_prepare_present_fence(unsigned long arg)
 
 	preset_fence_struct.present_fence_fd = data.fence;
 	preset_fence_struct.present_fence_index = data.value;
-	/* M95DBG: pairs with the frame_cfg print - the index handed out here is
-	 * what the blob is supposed to send back in disp_frame_cfg_t. */
-	pr_info_ratelimited("M95DBG present_fence create: idx=%u fd=%d\n",
-			    preset_fence_struct.present_fence_index,
-			    preset_fence_struct.present_fence_fd);
 	if (copy_to_user(argp, &preset_fence_struct, sizeof(preset_fence_struct))) {
 		pr_err("[FB Driver]: copy_to_user failed! line:%d\n", __LINE__);
 		ret = -EFAULT;
@@ -1228,36 +1223,9 @@ int _ioctl_frame_config(unsigned long arg)
 		return -EFAULT;
 	}
 
-	/* M95DBG: present_fence_idx read as 0 while the blob had just been
-	 * handed index 1 and 2, so the field is landing on the wrong offset -
-	 * disp_frame_cfg_t drifted between BSPs like caps and session_info did.
-	 * Dump the tail of what actually arrived, plus our own offsets, and the
-	 * index will be visible at whatever offset the blob really uses. */
-	{
-		static int m95dbg_dumped;
-
-		if (m95dbg_dumped < 2) {
-			m95dbg_dumped++;
-			pr_info("M95DBG cfg size=%zu off: session=%zu in_num=%zu overlap=%zu const_num=%zu out_en=%zu mode=%zu pfidx=%zu trig=%zu user=%zu\n",
-				sizeof(*frame_cfg),
-				offsetof(struct disp_frame_cfg_t, session_id),
-				offsetof(struct disp_frame_cfg_t, input_layer_num),
-				offsetof(struct disp_frame_cfg_t, overlap_layer_num),
-				offsetof(struct disp_frame_cfg_t, const_layer_num),
-				offsetof(struct disp_frame_cfg_t, output_en),
-				offsetof(struct disp_frame_cfg_t, mode),
-				offsetof(struct disp_frame_cfg_t, present_fence_idx),
-				offsetof(struct disp_frame_cfg_t, tigger_mode),
-				offsetof(struct disp_frame_cfg_t, user));
-			print_hex_dump(KERN_INFO, "M95DBG head ", DUMP_PREFIX_OFFSET,
-				       16, 4, frame_cfg, 64, false);
-			print_hex_dump(KERN_INFO, "M95DBG tail ", DUMP_PREFIX_OFFSET,
-				       16, 4,
-				       (char *)frame_cfg +
-				       offsetof(struct disp_frame_cfg_t, overlap_layer_num) - 32,
-				       160, false);
-		}
-	}
+	/* The layout this copy_from_user depends on is locked by the
+	 * BUILD_BUG_ON block above; it was established by dumping the incoming
+	 * buffer during bring-up and does not need to be re-derived at runtime. */
 
 	frame_cfg->setter = SESSION_USER_HWC;
 
@@ -1660,16 +1628,6 @@ long mtk_disp_mgr_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	int ret = -1;
 
 	/* DISPMSG("mtk_disp_mgr_ioctl, cmd=%s, arg=0x%08x\n", _session_ioctl_spy(cmd), arg); */
-
-	/* M95DBG: log every command that reaches the dispatcher. The blob was
-	 * seen taking present fences and then never sending FRAME_CONFIG, and
-	 * never tripping the BUG() on the legacy primary path either, so the
-	 * only way to see what it actually calls - and where the per-frame
-	 * sequence stops - is to print the lot. nr and size are what matter:
-	 * size is the struct ABI, and a command missing from this list is one
-	 * the blob decided not to issue. */
-	pr_info("M95DBG ioctl: cmd=0x%08x nr=%u size=%u\n",
-		cmd, _IOC_NR(cmd), _IOC_SIZE(cmd));
 
 	/* Queries whose struct grew in a later BSP - see _ioctl_widened(). */
 	if (_ioctl_widened_dispatch(cmd, arg, &ret))

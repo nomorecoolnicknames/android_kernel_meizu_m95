@@ -13,7 +13,14 @@
 
 #include <linux/slab.h>
 #include <linux/ratelimit.h>
-#include <linux/sched.h>   /* current->pid / current->comm, M95GE trace */
+/* current->pid / current->comm: kept for the handle-failure reports below.
+ * Those are the regression canary for the GE lifetime fix (84765c3e) - if
+ * userspace ever starts handing back dead handles again, the pid and comm say
+ * immediately who. They are rate-limited because gralloc ignores the result of
+ * ge_retain and imports the buffer regardless, so a flood is userspace's normal
+ * behaviour rather than a kernel fault.
+ */
+#include <linux/sched.h>
 #include <linux/mutex.h>
 #include <linux/seq_file.h>
 #include <linux/stddef.h>
@@ -297,8 +304,6 @@ static void _ged_ge_free_entry(GEEntry *entry)
 {
 	int i;
 
-	GE_PERR("M95GE free ver=%d ref=%d pid=%d(%s)\n",
-			entry->ver, entry->ref, current->pid, current->comm);
 
 	for (i = 0; i < entry->region_num; ++i)
 		kfree(entry->region_data[i]);
@@ -501,13 +506,6 @@ uint32_t ged_ge_alloc(int region_num, uint32_t *region_sizes)
 	/* encode a user_hnd */
 	ge_hnd = (entry->ver << GE_POOL_ENTRY_SHIFT) | idx;
 
-	/* M95GE: temporary lifecycle trace. Userspace was handing back handles we
-	 * had already recycled (idx 0 at ver 1 and ver 3), so print who gets what
-	 * and who later frees it. Remove once the ownership rule is settled.
-	 */
-	GE_PERR("M95GE alloc hnd=0x%x idx=%d ver=%d regions=%d pid=%d(%s)\n",
-			ge_hnd, idx, entry->ver, region_num,
-			current->pid, current->comm);
 
 	return ge_hnd;
 
@@ -528,7 +526,11 @@ int32_t ged_ge_retain(uint32_t ge_hnd)
 
 	entry = _gehnd2entry(ge_hnd);
 	if (!entry) {
-		GE_PERR("M95GE %s FAIL hnd=0x%x idx=%d ver=%d pid=%d(%s)\n", __func__, ge_hnd, GE_GEHND2IDX(ge_hnd), GE_GEHND2VER(ge_hnd), current->pid, current->comm);
+		if (__ratelimit(&gLookupFailRL))
+			GE_PERR("%s: invalid hnd=0x%x idx=%d ver=%d pid=%d(%s)\n",
+					__func__, ge_hnd, GE_GEHND2IDX(ge_hnd),
+					GE_GEHND2VER(ge_hnd),
+					current->pid, current->comm);
 		mutex_unlock(&gPoolMutex);
 		return -1;
 	}
@@ -550,7 +552,11 @@ int32_t ged_ge_release(uint32_t ge_hnd)
 
 	entry = _gehnd2entry(ge_hnd);
 	if (!entry) {
-		GE_PERR("M95GE %s FAIL hnd=0x%x idx=%d ver=%d pid=%d(%s)\n", __func__, ge_hnd, GE_GEHND2IDX(ge_hnd), GE_GEHND2VER(ge_hnd), current->pid, current->comm);
+		if (__ratelimit(&gLookupFailRL))
+			GE_PERR("%s: invalid hnd=0x%x idx=%d ver=%d pid=%d(%s)\n",
+					__func__, ge_hnd, GE_GEHND2IDX(ge_hnd),
+					GE_GEHND2VER(ge_hnd),
+					current->pid, current->comm);
 		mutex_unlock(&gPoolMutex);
 		return -1;
 	}

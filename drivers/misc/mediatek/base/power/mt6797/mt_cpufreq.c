@@ -18,7 +18,12 @@
  */
 
 #define __MT_CPUFREQ_C__
-#define DEBUG 1
+/* M95 log hygiene: the BSP shipped with DEBUG defined, which turns every
+ * pr_debug/cpufreq_dbg in this file into an emitted KERN_DEBUG line -
+ * ~230 lines/min of _cpufreq_set_locked chatter alone with MTK hotplug
+ * churning (2026-08-09 dmesg audit). Re-define locally when working on
+ * DVFS. */
+/* #define DEBUG 1 */
 /* system includes */
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -4620,7 +4625,11 @@ static int _mt_cpufreq_sync_opp_tbl_idx(struct mt_cpu_dvfs *p)
 		ret = _sync_opp_tbl_idx(p);
 
 
-	cpufreq_info("%s freq = %d\n", cpu_dvfs_get_name(p), cpu_dvfs_get_cur_freq(p));
+	/* M95 log hygiene: this syncs on every cluster on/off, so with MTK
+	 * hotplug churning it was ~190 pr_warn lines/min of "MT_CPU_DVFS_B
+	 * freq = ..." (2026-08-09 dmesg audit). The BSP itself carries a
+	 * commented-out pr_debug variant of the same line above. */
+	cpufreq_dbg("%s freq = %d\n", cpu_dvfs_get_name(p), cpu_dvfs_get_cur_freq(p));
 
 	FUNC_EXIT(FUNC_LV_LOCAL);
 

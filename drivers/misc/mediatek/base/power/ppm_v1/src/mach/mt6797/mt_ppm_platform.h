@@ -60,7 +60,12 @@ extern unsigned int hps_get_hvytsk(unsigned int cluster_id);
 #define SKIP_ADVISE_BOUNDARY		(300)
 #endif
 
-#define PPM_OUTPUT_TRANS_LOG_TO_UART	(1)
+/* M95 log hygiene: with this defined every PPM state transition goes out
+ * through ppm_info (pr_warn) - ~300 lines/min of "(0x248)(N)(N)[4L_LL]:..."
+ * on this hotplug-happy SoC (2026-08-09 dmesg audit). Undefined, the same
+ * line takes MTK's own quiet path (ppm_dbg, gated by the ppm_debug knob).
+ * UART logging is already off on this device (printk.disable_uart=1). */
+/* #define PPM_OUTPUT_TRANS_LOG_TO_UART	(1) */
 
 #ifndef PPM_DISABLE_CLUSTER_MIGRATION
 #define PPM_CLUSTER_MIGRATION_BOOST	(1)

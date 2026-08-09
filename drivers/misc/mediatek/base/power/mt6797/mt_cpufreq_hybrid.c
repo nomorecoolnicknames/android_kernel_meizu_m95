@@ -607,7 +607,13 @@ static u32 dbgx_log_en = /*(DLF_DVFS << 16) |*/
 			 DLF_PAUSE |
 			 /*DLF_SEMA |*/
 			 /*DLF_DVFS |*/
-			 DLF_CLUSTER |
+			 /* M95 log hygiene: cluster on/off tracks MTK hotplug
+			  * churn and was ~390 pr_err lines/min, the single
+			  * biggest E-level source in the kernel ring
+			  * (2026-08-09 dmesg audit). Routed to the pr_debug
+			  * half of this switch; runtime-restorable via
+			  * debugfs cpuhvfs/dbgx_log_en. */
+			 (DLF_CLUSTER << 16) |
 			 DLF_KICK;
 
 #ifdef __TRIAL_RUN__
