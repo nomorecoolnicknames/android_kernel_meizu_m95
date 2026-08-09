@@ -31,7 +31,23 @@
 #define CMDQ_PROFILE_MARKER_SUPPORT
 
 #ifdef CMDQ_PROFILE_MARKER_SUPPORT
-#define CMDQ_MAX_PROFILE_MARKER_IN_TASK (5)
+/* The Flyme MDP blob (libdpframework, the only userspace CMDQ client on this
+ * device) was built with 7 profile-marker slots. profileMarker is the LAST
+ * field of cmdqCommandStruct, so that count is the only size difference:
+ * 224 vs 208 bytes for cmdqCommandStruct and 232 vs 216 for cmdqJobStruct.
+ * Since _IOW folds sizeof() into the ioctl number, with 5 the blob's
+ * EXEC_COMMAND (0x40E07803) and ASYNC_JOB_EXEC (0x40E87805) never match ours
+ * and every MDP job is rejected outright:
+ *     [CMDQ][ERR][COMPAT]unrecognized ioctl 0x40e87805
+ * which killed the camera preview's DIP path - no jobs enqueue, DpIspStream
+ * finds both its lists empty, and the blob's error path then aborts on an
+ * already-destroyed mutex, taking the provider and cameraserver with it.
+ *
+ * 7 makes both codes match bit-for-bit against the constants disassembled
+ * from the blob, and closes a latent out-of-bounds besides: the blob may pass
+ * profileMarker.count up to 7 into arrays we had sized for 5.
+ */
+#define CMDQ_MAX_PROFILE_MARKER_IN_TASK (7)
 #endif
 
 #define CMDQ_INVALID_THREAD             (-1)
