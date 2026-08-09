@@ -17,6 +17,9 @@
 #define HUGETLBFS_MAGIC 	0x958458f6	/* some random number */
 #define SQUASHFS_MAGIC		0x73717368
 #define ECRYPTFS_SUPER_MAGIC	0xf15f
+/* AOSP sdcardfs; added with the Pie sdcardfs backport - this constant
+ * postdates 3.18.22 upstream. Value from AOSP include/uapi/linux/magic.h. */
+#define SDCARDFS_SUPER_MAGIC	0x5dca2df5
 #define EFS_SUPER_MAGIC		0x414A53
 #define EXT2_SUPER_MAGIC	0xEF53
 #define EXT3_SUPER_MAGIC	0xEF53
