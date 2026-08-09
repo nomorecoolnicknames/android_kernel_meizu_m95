@@ -1588,11 +1588,40 @@ static const int mt6351_VRF18_1_voltages[] = {
 	1810000,
 };
 
+/*
+ * m95: VOSEL step 3 of MT6351 VGP3 is 1.22 V, not 1.20 V.
+ *
+ * VGP3 is the front camera's DVDD (DT: kd_camera_hw1 vcamd_sub-supply ->
+ * ldo_vgp3; imgsensor asks for it by name, kd_sensorlist.c:3260
+ * regulator_get(dev, "vgp3")), and kdCISModulePowerOn() powers the sub
+ * sensor with _hwPowerOn(SUB_DVDD, Vol_1220) == 1220000 uV
+ * (imgsensor/src/mt6797/camera_hw/kd_camera_hw.c:400).
+ *
+ * mtk_regulator_ops supplies only .list_voltage/.set_voltage_sel, so the
+ * core resolves the request through regulator_map_voltage_iterate(), which
+ * needs a table entry inside [min_uV, max_uV] - and the caller passes
+ * min == max == 1220000. With 1200000 here nothing matches,
+ * regulator_set_voltage() returns -EINVAL, _hwPowerOn() returns FALSE and
+ * kdCISModulePowerOn() bails to _kdCISModulePowerOn_exit_ with -EIO before
+ * it ever releases the sensor's reset. The OV5695 therefore never answers
+ * on i2c-3/0x36, CHECK_SENSOR_ID returns 0xFFFFFFFF, and userspace sees one
+ * camera:
+ *     /proc/driver/camera_info          -> " CAM[1]:imx386sunnymipiraw;"
+ *     .../kd_camera_hw/sub_camera_type  -> "null"
+ *     dumpsys media.camera              -> "Number of camera devices: 1"
+ *
+ * Ground truth is the shipping Flyme kernel: its VGP3 table reads
+ * {1000000, 1050000, 1100000, 1220000, 1300000, 1500000, 1800000, 1810000}
+ * (prebuilt/Image.gz-dtb-flyme8, decompressed image offsets 0xbcaae0 and
+ * 0xbcab38). This tree's own mt6351_rf18_voltages[] - the same eight-step
+ * MT6351 ladder - already has 1220000, so the 1200000 below is a single
+ * transcription error in the released BSP, not a board difference.
+ */
 static const int mt6351_VGP3_voltages[] = {
 	1000000,
 	1050000,
 	1100000,
-	1200000,
+	1220000,
 	1300000,
 	1500000,
 	1800000,
