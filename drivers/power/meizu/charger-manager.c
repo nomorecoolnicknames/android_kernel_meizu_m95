@@ -133,10 +133,14 @@ struct battery_data {
 
 static enum power_supply_property ac_props[] = {
 	POWER_SUPPLY_PROP_ONLINE,
+	POWER_SUPPLY_PROP_CURRENT_MAX,
+	POWER_SUPPLY_PROP_VOLTAGE_MAX,
 };
 
 static enum power_supply_property usb_props[] = {
 	POWER_SUPPLY_PROP_ONLINE,
+	POWER_SUPPLY_PROP_CURRENT_MAX,
+	POWER_SUPPLY_PROP_VOLTAGE_MAX,
 };
 
 static enum power_supply_property battery_props[] = {
@@ -145,6 +149,7 @@ static enum power_supply_property battery_props[] = {
 	POWER_SUPPLY_PROP_VOLTAGE_NOW,
 	POWER_SUPPLY_PROP_batt_vol,
 	POWER_SUPPLY_PROP_CURRENT_NOW,
+	POWER_SUPPLY_PROP_CHARGE_COUNTER,
 	POWER_SUPPLY_PROP_CAPACITY,
 	POWER_SUPPLY_PROP_TEMP,
 	POWER_SUPPLY_PROP_TECHNOLOGY,
@@ -166,6 +171,26 @@ void wake_up_bat(void)
 }
 EXPORT_SYMBOL(wake_up_bat);
 
+/* Input limit the charging path is currently allowed to draw from VBUS,
+ * in uA for the power_supply ABI (healthd "Max charging current").
+ * CHR_CURRENT_ENUM encodes current in units of 10 uA. */
+static int charger_input_current_max_uA(void)
+{
+	return (int)g_temp_input_CC_value * 10;
+}
+
+/* Live VBUS voltage from the bq2589x ADC in uV (the ADC reports mV).
+ * Falls back to the nominal 5 V if the read fails, so healthd never
+ * sees a negative errno as a voltage. */
+static int charger_voltage_max_uV(void)
+{
+	int mv = bq2589x_adc_read_charger_volt();
+
+	if (mv <= 0)
+		mv = 5000;
+	return mv * 1000;
+}
+
 static int ac_get_property(struct power_supply *psy,
 			   enum power_supply_property psp, union power_supply_propval *val)
 {
@@ -175,6 +200,12 @@ static int ac_get_property(struct power_supply *psy,
 	switch (psp) {
 	case POWER_SUPPLY_PROP_ONLINE:
 		val->intval = data->AC_ONLINE;
+		break;
+	case POWER_SUPPLY_PROP_CURRENT_MAX:
+		val->intval = charger_input_current_max_uA();
+		break;
+	case POWER_SUPPLY_PROP_VOLTAGE_MAX:
+		val->intval = charger_voltage_max_uV();
 		break;
 	default:
 		ret = -EINVAL;
@@ -192,6 +223,12 @@ static int usb_get_property(struct power_supply *psy,
 	switch (psp) {
 	case POWER_SUPPLY_PROP_ONLINE:
 		val->intval = data->USB_ONLINE;
+		break;
+	case POWER_SUPPLY_PROP_CURRENT_MAX:
+		val->intval = charger_input_current_max_uA();
+		break;
+	case POWER_SUPPLY_PROP_VOLTAGE_MAX:
+		val->intval = charger_voltage_max_uV();
 		break;
 	default:
 		ret = -EINVAL;
@@ -227,16 +264,29 @@ static int battery_get_property(struct power_supply *psy,
 				val->intval = data->capacity;
 			break;
 		case POWER_SUPPLY_PROP_VOLTAGE_NOW:
-			val->intval = data->voltage_now;
+			/* power_supply ABI is uV; BMT_status.bat_vol is mV.
+			 * healthd divides by 1000, so reporting mV here made
+			 * the framework see "3" instead of ~3863. Keep
+			 * batt_vol below in mV: the stock camera 3A blob
+			 * (libcam.hal3a.v3.so) reads it and expects mV. */
+			val->intval = data->voltage_now * 1000;
 			break;
 		case POWER_SUPPLY_PROP_batt_vol:
 			val->intval = data->voltage_now;
 			break;
 		case POWER_SUPPLY_PROP_CURRENT_NOW:
 			battery_charging_control(CHARGING_CMD_GET_BATTERYCURR_NOW, &data->curr_now);
-			if (BMT_status.charger_exist == KAL_FALSE)
-				data->curr_now -= 65535;
-			val->intval = data->curr_now;
+			/* bq27532 NOW_CURR is a raw unsigned 16-bit word in
+			 * mA, two's complement (negative = discharging). The
+			 * old "-= 65535" was an off-by-one sign fix applied
+			 * only with no charger present; a charging phone under
+			 * load reported e.g. 64183 instead of -1353. Sign-
+			 * extend properly and convert mA -> uA for the ABI. */
+			val->intval = (int)(s16)(data->curr_now & 0xffff) * 1000;
+			break;
+		case POWER_SUPPLY_PROP_CHARGE_COUNTER:
+			/* uAh remaining capacity from the bq27532 gauge */
+			val->intval = bq27532_battery_read_remaining_capacity();
 			break;
 		case POWER_SUPPLY_PROP_TEMP:
 			val->intval = data->batt_temp;

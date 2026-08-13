@@ -175,6 +175,20 @@ static inline int bq27532_battery_read_nac(struct bq27532_device_info *di)
 	return bq27532_battery_read_charge(di, BQ27532_REG_NAC);
 }
 
+/* Remaining (nominal available) capacity in uAh, for
+ * POWER_SUPPLY_PROP_CHARGE_COUNTER. Clamped to 0 on read error so the
+ * framework never sees a negative errno as a charge value. */
+signed int bq27532_battery_read_remaining_capacity(void)
+{
+	int nac;
+
+	if (!battery_exist)
+		return 0;
+
+	nac = bq27532_battery_read_nac(di_info);
+	return nac < 0 ? 0 : nac;
+}
+
 static inline int bq27532_battery_read_fcc(struct bq27532_device_info *di)
 {
 	return bq27532_battery_read_charge(di, BQ27532_REG_FCC);
