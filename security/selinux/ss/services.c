@@ -621,17 +621,28 @@ void services_compute_operation_type(
 		struct operation *ops,
 		struct avtab_node *node)
 {
-	u8 type;
 	unsigned int i;
 
-	if (node->key.specified & AVTAB_OPTYPE) {
-		/* if allowing one or more complete types */
+	/* M95 bring-up (2026-08-14): this kernel loads Android 9 policydb v30
+	 * xperms entries. avtab_read_item() stores the on-disk `specified`
+	 * selector byte in u.ops->type (AVTAB_XPERMS_IOCTLFUNCTION/-DRIVER)
+	 * and the driver byte in u.ops->driver; key.specified is always an
+	 * AVTAB_OPNUM_* value (0x0100/0x0200/0x0400) in this format, so the
+	 * old AVTAB_OPTYPE key bits never occur. The pre-fix code fed
+	 * u.ops->type (== 0x01/0x02) to security_operation_set(), flagging
+	 * drivers 0x01/0x02 instead of the real driver byte — which made
+	 * avc_has_operation() treat EVERY ioctl on any allowxperm'd pair as
+	 * "restricted but not listed", i.e. deny-all under enforcing and an
+	 * audit record per call under permissive. FACT: netd/wpa_supplicant/
+	 * system_server/rild socket-ioctl denials for commands the policy
+	 * explicitly whitelists (sesearch vs live denials, 2026-08-14). */
+	if (node->datum.u.ops->type == AVTAB_XPERMS_IOCTLDRIVER) {
+		/* whole-driver grants: perms is a bitmap of driver bytes */
 		for (i = 0; i < ARRAY_SIZE(ops->type); i++)
 			ops->type[i] |= node->datum.u.ops->op.perms[i];
 	} else {
-		/* if allowing operations within a type */
-		type = node->datum.u.ops->type;
-		security_operation_set(ops->type, type);
+		/* per-command grants within the driver byte in .driver */
+		security_operation_set(ops->type, node->datum.u.ops->driver);
 	}
 
 	/* If no ioctl commands are allowed, ignore auditallow and auditdeny */
@@ -939,42 +950,50 @@ void services_compute_operation_num(struct operation_decision *od,
 {
 	unsigned int i;
 
-	if (node->key.specified & AVTAB_OPNUM) {
-		if (od->type != node->datum.u.ops->type)
-			return;
-	} else {
+	int driver_entry =
+		(node->datum.u.ops->type == AVTAB_XPERMS_IOCTLDRIVER);
+
+	/* M95 bring-up (2026-08-14): dispatch on the v30 xperms selector in
+	 * u.ops->type, not on key.specified — see the twin comment in
+	 * services_compute_operation_type(). Relevance test first: */
+	if (driver_entry) {
+		/* whole-driver entry: relevant iff our driver bit is set */
 		if (!security_operation_test(node->datum.u.ops->op.perms,
 					od->type))
 			return;
+	} else {
+		/* per-command entry: relevant iff same driver byte */
+		if (od->type != node->datum.u.ops->driver)
+			return;
 	}
 
-	if (node->key.specified == AVTAB_OPTYPE_ALLOWED) {
+	if (node->key.specified == AVTAB_OPNUM_ALLOWED) {
 		od->specified |= OPERATION_ALLOWED;
-		memset(od->allowed->perms, 0xff,
-				sizeof(od->allowed->perms));
-	} else if (node->key.specified == AVTAB_OPTYPE_AUDITALLOW) {
-		od->specified |= OPERATION_AUDITALLOW;
-		memset(od->auditallow->perms, 0xff,
-				sizeof(od->auditallow->perms));
-	} else if (node->key.specified == AVTAB_OPTYPE_DONTAUDIT) {
-		od->specified |= OPERATION_DONTAUDIT;
-		memset(od->dontaudit->perms, 0xff,
-				sizeof(od->dontaudit->perms));
-	} else if (node->key.specified == AVTAB_OPNUM_ALLOWED) {
-		od->specified |= OPERATION_ALLOWED;
-		for (i = 0; i < ARRAY_SIZE(od->allowed->perms); i++)
-			od->allowed->perms[i] |=
-					node->datum.u.ops->op.perms[i];
+		if (driver_entry)
+			memset(od->allowed->perms, 0xff,
+					sizeof(od->allowed->perms));
+		else
+			for (i = 0; i < ARRAY_SIZE(od->allowed->perms); i++)
+				od->allowed->perms[i] |=
+						node->datum.u.ops->op.perms[i];
 	} else if (node->key.specified == AVTAB_OPNUM_AUDITALLOW) {
 		od->specified |= OPERATION_AUDITALLOW;
-		for (i = 0; i < ARRAY_SIZE(od->auditallow->perms); i++)
-			od->auditallow->perms[i] |=
-					node->datum.u.ops->op.perms[i];
+		if (driver_entry)
+			memset(od->auditallow->perms, 0xff,
+					sizeof(od->auditallow->perms));
+		else
+			for (i = 0; i < ARRAY_SIZE(od->auditallow->perms); i++)
+				od->auditallow->perms[i] |=
+						node->datum.u.ops->op.perms[i];
 	} else if (node->key.specified == AVTAB_OPNUM_DONTAUDIT) {
 		od->specified |= OPERATION_DONTAUDIT;
-		for (i = 0; i < ARRAY_SIZE(od->dontaudit->perms); i++)
-			od->dontaudit->perms[i] |=
-					node->datum.u.ops->op.perms[i];
+		if (driver_entry)
+			memset(od->dontaudit->perms, 0xff,
+					sizeof(od->dontaudit->perms));
+		else
+			for (i = 0; i < ARRAY_SIZE(od->dontaudit->perms); i++)
+				od->dontaudit->perms[i] |=
+						node->datum.u.ops->op.perms[i];
 	} else {
 		BUG();
 	}

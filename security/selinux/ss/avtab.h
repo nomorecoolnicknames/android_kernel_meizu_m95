@@ -51,6 +51,14 @@ struct avtab_key {
 				AVTAB_OPTYPE_DONTAUDIT)
 #define AVTAB_OP		(AVTAB_OPNUM | AVTAB_OPTYPE)
 #define AVTAB_XPERMS		0x8000 /* ioctl xperm entries, Android 8+ policy bit (M95 bring-up) */
+
+/* M95 bring-up: policydb v30 (Android 8+) xperms on-disk entries carry a
+ * one-byte `specified` selector that avtab_read_item() stores in
+ * avtab_operation.type, followed by the driver byte stored in .driver.
+ * These are the two selector values libsepol writes. They are NOT driver
+ * bytes — decision code must dispatch on them (see services.c). */
+#define AVTAB_XPERMS_IOCTLFUNCTION	0x01 /* perms = commands within .driver */
+#define AVTAB_XPERMS_IOCTLDRIVER	0x02 /* perms = bitmap of driver bytes  */
 #define AVTAB_ENABLED_OLD   0x80000000 /* reserved for used in cond_avtab */
 #define AVTAB_ENABLED		0x8000 /* reserved for used in cond_avtab */
 	u16 specified;	/* what field is specified */
