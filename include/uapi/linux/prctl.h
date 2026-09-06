@@ -185,6 +185,17 @@ struct prctl_mm_map {
  */
 #define PR_SET_TIMERSLACK_PID 43
 
+/*
+ * Control the ambient capability set (M95 backport of mainline 4.3
+ * 58319057b784 "capabilities: ambient capabilities", the android-3.18
+ * common-kernel change Android R init relies on for `capabilities`).
+ */
+#define PR_CAP_AMBIENT			47
+# define PR_CAP_AMBIENT_IS_SET		1
+# define PR_CAP_AMBIENT_RAISE		2
+# define PR_CAP_AMBIENT_LOWER		3
+# define PR_CAP_AMBIENT_CLEAR_ALL	4
+
 #define PR_SET_VMA		0x53564d41
 # define PR_SET_VMA_ANON_NAME		0
 
