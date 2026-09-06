@@ -1556,8 +1556,24 @@ INT32 wmt_dev_patch_get(PUINT8 pPatchName, osal_firmware **ppPatch, INT32 padSzB
 
 	set_fs(get_ds());
 
-	/* load patch file from fs */
-	iRet = wmt_dev_read_file(pPatchName, (const PPUINT8)&pfw->data, 0, padSzBuf);
+	/* load patch file from fs.
+	 * wmt_launcher hands over BARE patch names (ROMv3_patch_1_1_hdr.bin);
+	 * filp_open() then resolves them against this kthread's cwd, i.e. "/".
+	 * Stock kept the patches in /system/etc/firmware and the launcher's
+	 * -p dir only, which worked because Nougat's root was a writable
+	 * ramdisk. With system-as-root (Android 11) "/" is the read-only
+	 * system image, so resolve relative names under the same prefix the
+	 * WMT_SOC.cfg loader uses (CUST_CFG_WMT_PREFIX, wmt_conf.h).
+	 */
+	if (pPatchName[0] != '/') {
+		UINT8 fullName[NAME_MAX + 1];
+
+		osal_snprintf(fullName, sizeof(fullName), "%s%s",
+			      CUST_CFG_WMT_PREFIX, pPatchName);
+		iRet = wmt_dev_read_file(fullName, (const PPUINT8)&pfw->data, 0, padSzBuf);
+	} else {
+		iRet = wmt_dev_read_file(pPatchName, (const PPUINT8)&pfw->data, 0, padSzBuf);
+	}
 	set_fs(orig_fs);
 
 	cred->fsuid.val = orig_uid;
