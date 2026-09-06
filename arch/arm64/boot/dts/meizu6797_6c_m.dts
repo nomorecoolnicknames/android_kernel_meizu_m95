@@ -40,6 +40,42 @@
 		};
 	};
 
+	/* Android first-stage mount table (R init reads firmware/android/fstab;
+	 * no ramdisk fstab fallback is relied upon). dev paths MUST be by-name:
+	 * BlockDevInitializer matches wanted partitions against the uevent
+	 * PARTNAME (basename of dev); raw mmcblk0pN basenames can never match
+	 * ("custom"/"system") and the wait always times out into InitFatalReboot
+	 * (measured 2026-09-04: 10s timeout -> reboot,bootloader). R init creates
+	 * the by-name symlinks itself while handling first-stage uevents, so the
+	 * 2026-08-05 ueventd race does not apply here. by-name(system,custom)
+	 * verified present on-device (TWRP); names come from GPT, kernel-
+	 * independent. custom=512 MiB FACT; system=2560 MiB FACT.
+	 */
+	firmware {
+		android {
+			compatible = "android,firmware";
+			fstab {
+				compatible = "android,fstab";
+				system {
+					compatible = "android,system";
+					dev = "/dev/block/platform/mtk-msdc.0/11230000.msdc0/by-name/system";
+					type = "ext4";
+					mnt_flags = "ro,barrier=1";
+					fsmgr_flags = "wait";
+					status = "ok";
+				};
+				vendor {
+					compatible = "android,vendor";
+					dev = "/dev/block/platform/mtk-msdc.0/11230000.msdc0/by-name/custom";
+					type = "ext4";
+					mnt_flags = "ro,barrier=1";
+					fsmgr_flags = "wait";
+					status = "ok";
+				};
+			};
+		};
+	};
+
 
 	soc {
 		compatible = "simple-bus";
