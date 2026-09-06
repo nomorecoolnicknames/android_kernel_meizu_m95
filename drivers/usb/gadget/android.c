@@ -2856,6 +2856,17 @@ static int __init init(void)
 	INIT_WORK(&dev->work, android_work);
 	mutex_init(&dev->mutex);
 
+	/* M95 (2026-09-06): do NOT call functionfs_init() here. f_fs.c is
+	 * #included above and its filesystem is registered by ffs_function_init()
+	 * (supported_functions[] -> "ffs") during android_bind(); the comboA2
+	 * capture shows "[g_android]file system registered" + "init ffs success"
+	 * at 4.43s on the unmodified driver. A second register_filesystem() from
+	 * init() makes ffs_function_init() fail with -EBUSY, android_init_functions()
+	 * aborts the bind, and the gadget never enumerates at all (boot7 on
+	 * 2026-09-04: zero USB traffic in the ram console). The R adbd "offline"
+	 * symptom that motivated the extra call came from userspace: the vendor
+	 * usb rc (mount functionfs + f_ffs/aliases adb) was never imported.
+	 */
 	err = android_create_device(dev);
 	if (err) {
 		pr_err("%s: failed to create android device %d", __func__, err);

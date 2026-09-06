@@ -2844,6 +2844,10 @@ CONFIG_USB_F_SERIAL=y
 # CONFIG_USB_G_NCM is not set
 # CONFIG_USB_GADGETFS is not set
 # CONFIG_USB_FUNCTIONFS is not set
+# (M95 note: USB_FUNCTIONFS is the g_ffs gadget, choice-locked against
+# USB_G_ANDROID, and =y here is silently dropped. It is NOT needed: android.c
+# #includes f_fs.c and its "ffs" function registers the functionfs filesystem
+# at bind time -- "[g_android]file system registered" at 4.4s in the boot log.)
 # CONFIG_USB_MASS_STORAGE is not set
 # CONFIG_USB_G_SERIAL is not set
 # CONFIG_USB_MIDI_GADGET is not set
