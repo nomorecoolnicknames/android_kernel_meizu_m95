@@ -906,6 +906,9 @@ static mm_segment_t orgfs;
 static PUINT_8 apucFwPath[] = {
 	(PUINT_8) "/storage/sdcard0/",
 	(PUINT_8) "/etc/firmware/",
+	/* M95 (2026-09-06): Android 11 ships WIFI_RAM_CODE_6797 on /vendor. */
+	(PUINT_8) "/vendor/etc/firmware/",
+	(PUINT_8) "/vendor/firmware/",
 	NULL
 };
 

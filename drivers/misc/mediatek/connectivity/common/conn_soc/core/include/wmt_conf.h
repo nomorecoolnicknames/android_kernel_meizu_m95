@@ -31,7 +31,12 @@
 ********************************************************************************
 */
 #define CUST_CFG_WMT "WMT_SOC.cfg"
-#define CUST_CFG_WMT_PREFIX "/system/etc/firmware/"
+/* M95 (2026-09-06): Android 11 keeps this file on the vendor partition
+ * (/vendor/etc/firmware/WMT_SOC.cfg); /system/etc/firmware no longer exists
+ * there. With the old prefix wmt_lib_init() failed and its error path
+ * panicked the kernel on every boot (wmt_plat_deinit -> wakeup_source_remove
+ * on a never-initialised wakelock), see A11_BRINGUP_STATE.md. */
+#define CUST_CFG_WMT_PREFIX "/vendor/etc/firmware/"
 
 /*******************************************************************************
 *                    E X T E R N A L   R E F E R E N C E S

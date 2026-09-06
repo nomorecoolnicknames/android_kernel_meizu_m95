@@ -310,6 +310,12 @@ static UINT32 wmt_plat_soc_co_clock_flag_set(UINT32 flag)
 	return 0;
 }
 
+/* M95 (2026-09-06): wmt_lib_deinit() runs the platform deinit even when
+ * wmt_lib_init() bailed out before wmt_plat_init() (missing WMT_SOC.cfg):
+ * wakeup_source_trash() on the never-initialised wmtWakeLock then hits a NULL
+ * list pointer and panics the kernel. Remember whether init happened. */
+static INT32 gWmtPlatInited;
+
 INT32 wmt_plat_init(UINT32 co_clock_type)
 {
 	CMB_STUB_CB stub_cb;
@@ -346,6 +352,7 @@ INT32 wmt_plat_init(UINT32 co_clock_type)
 	spin_lock_init(&gbgfIrqBle.lock);
 	WMT_PLAT_DBG_FUNC("WMT-PLAT: ALPS platform init (%d)\n", iret);
 
+	gWmtPlatInited = 1;
 	return 0;
 }
 EXPORT_SYMBOL(wmt_plat_init);
@@ -353,6 +360,12 @@ EXPORT_SYMBOL(wmt_plat_init);
 INT32 wmt_plat_deinit(VOID)
 {
 	INT32 iret = 0;
+
+	if (!gWmtPlatInited) {
+		WMT_PLAT_WARN_FUNC("WMT-PLAT: deinit without init, skipping\n");
+		return 0;
+	}
+	gWmtPlatInited = 0;
 	/* 2. unreg to cmb_stub */
 	iret = mtk_wcn_cmb_stub_unreg();
 
