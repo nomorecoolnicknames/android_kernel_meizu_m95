@@ -979,6 +979,44 @@ static ssize_t min_duty_store(struct device *dev,
 	return count;
 }
 
+/*
+ * torch_timeout_ms -- the FLASH_IOC_SET_TIME_OUT_TIME_MS value above which the
+ * LM3644 driver treats a request as a torch rather than a flash. Instrument:
+ * the capture path passes 20000 and is therefore filed as a torch today, so
+ * raising this past 20000 is the one-line experiment that says whether the
+ * flash table (996 mA) can be used for a photograph on this phone.
+ */
+extern void FL_set_torch_timeout(int ms);
+extern int FL_get_torch_timeout(void);
+
+static ssize_t torch_timeout_show(struct device *dev,
+				struct device_attribute *attr,
+				char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", FL_get_torch_timeout());
+}
+
+static ssize_t torch_timeout_store(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t count)
+{
+	int ms = 0;
+
+	if (kstrtoint(buf, 10, &ms))
+		return -EINVAL;
+
+	FL_set_torch_timeout(ms);
+	logI("[torch_timeout_store] torch threshold = %d ms\n", FL_get_torch_timeout());
+
+	return count;
+}
+
+static struct device_attribute dev_attr_torch_timeout = {
+	.attr = {.name = "torch_timeout_ms", .mode = 0644},
+	.show = torch_timeout_show,
+	.store = torch_timeout_store,
+};
+
 static struct device_attribute dev_attr_min_duty = {
 	.attr = {.name = "min_duty", .mode = 0644},
 	.show = min_duty_show,
@@ -1122,6 +1160,7 @@ static int flashlight_probe(struct platform_device *dev)
 	/* GPIO pinctrl initial */
 	flashlight_gpio_init(dev);
 	device_create_file(flashlight_device, &dev_attr_min_duty);
+	device_create_file(flashlight_device, &dev_attr_torch_timeout);
 	device_create_file(flashlight_device, &dev_attr_flash1);
 	device_create_file(flashlight_device, &dev_attr_flash2);
 	device_create_file(flashlight_device, &dev_attr_factory_flash);

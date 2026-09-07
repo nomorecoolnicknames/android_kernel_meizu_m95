@@ -362,8 +362,37 @@ MODULE_LICENSE("GPL v2");
  * instead of costing a kernel build per attempt. It is an instrument, not a
  * fix -- the real repair belongs wherever the level should have been computed.
  */
-int g_minFlashDuty;
+/*
+ * Default 5 is not a placeholder. FACT (m95, 2026-09-07 23:16, dark room,
+ * 3072x4096 mean luminance): with the floor at 0 the flash frame measures 51.5,
+ * with it at 5 it measures 130.1, and with the flash off, 2.1. The blob asks
+ * for index 5 on one rail and index 1 on the other; index 5 is the last entry
+ * of the six-entry torch table (140 mA), which is as far as this can go while
+ * the capture runs in torch mode -- a higher floor would index gTorchDuty out
+ * of bounds. device-18.1/meizu/m95/rootdir/init.mt6797.rc writes the same 5 at
+ * boot; that line is the one to edit, this default only makes the phone behave
+ * correctly with a vendor image that predates it.
+ */
+int g_minFlashDuty = 5;
 EXPORT_SYMBOL(g_minFlashDuty);
+
+/* Timeout above which FLASH_IOC_SET_TIME_OUT_TIME_MS is read as "torch". */
+int g_torchTimeoutMs = 10000;
+EXPORT_SYMBOL(g_torchTimeoutMs);
+
+void FL_set_torch_timeout(int ms)
+{
+	if (ms < 0)
+		ms = 0;
+	g_torchTimeoutMs = ms;
+}
+EXPORT_SYMBOL(FL_set_torch_timeout);
+
+int FL_get_torch_timeout(void)
+{
+	return g_torchTimeoutMs;
+}
+EXPORT_SYMBOL(FL_get_torch_timeout);
 
 void FL_set_min_duty(int duty)
 {
@@ -381,10 +410,25 @@ int FL_get_min_duty(void)
 }
 EXPORT_SYMBOL(FL_get_min_duty);
 
+/*
+ * The two brightness tables are not the same length: gFlashDuty has DUTY_NUM
+ * (39) entries, gTorchDuty has six. The vendor code clamps the incoming duty to
+ * DUTY_NUM - 1 in both paths and then indexes whichever table the mode selects,
+ * so any torch request above index 5 reads off the end of gTorchDuty and writes
+ * whatever it found into the LM3644 brightness register. Nothing asked for that
+ * today -- the blob asks for 5 and 1 -- but min_duty exists precisely to raise
+ * the index, so clamp per table instead of leaving the trap armed.
+ */
+#define TORCH_DUTY_NUM	((int)(sizeof(gTorchDuty) / sizeof(gTorchDuty[0])))
+
 static kal_uint32 FL_clamp_duty(kal_uint32 duty)
 {
+	int top = torch_flag ? TORCH_DUTY_NUM - 1 : DUTY_NUM - 1;
+
 	if (g_minFlashDuty > 0 && duty < (kal_uint32)g_minFlashDuty)
-		return (kal_uint32)g_minFlashDuty;
+		duty = (kal_uint32)g_minFlashDuty;
+	if (duty > (kal_uint32)top)
+		duty = (kal_uint32)top;
 	return duty;
 }
 
@@ -625,7 +669,30 @@ static int constant_flashlight_ioctl(unsigned int cmd, unsigned long arg)
 
 	case FLASH_IOC_SET_TIME_OUT_TIME_MS:
 		PK_DBG("FLASH_IOC_SET_TIME_OUT_TIME_MS: %d\n",(int)arg);
-		if (arg == 0 || arg > 10000)
+		/*
+		 * This is where torch and flash part company, and the rule is a
+		 * guess about what the blob meant by the number it passed.
+		 *
+		 * FACT (m95, 2026-09-07 23:05-23:12, kernel #81): the framework
+		 * torch (camera provider, HwBinder thread) sets the timeout to
+		 * 0; the 3A pre-flash metering also sets 0; only the capture
+		 * sets 20000, and it is the capture -- and only the capture --
+		 * that this rule misfiles as a torch, because 20000 > 10000.
+		 * So the ceiling below decides whether a photograph is lit by
+		 * the torch table (six entries, 140 mA) or the flash table
+		 * (39 entries, 996 mA).
+		 *
+		 * The ceiling is left at 10000, i.e. today's behaviour, because
+		 * flash mode has a hardware limit that has not been measured on
+		 * this phone yet: FL_current_timeout_set writes REG_FLASH_TOUT
+		 * 0x0f, and the LM3644 cuts a flash pulse at ~400 ms, while the
+		 * observed capture window is ~550 ms. Raising the ceiling past
+		 * 20000 through
+		 * /sys/class/flashlightdrv/kd_camera_flashlight/torch_timeout_ms
+		 * puts the capture into flash mode for one experiment, with no
+		 * kernel build, and answers that.
+		 */
+		if (arg == 0 || arg > (unsigned long)g_torchTimeoutMs)
 			torch_flag = true;
 		else
 			torch_flag = false;
