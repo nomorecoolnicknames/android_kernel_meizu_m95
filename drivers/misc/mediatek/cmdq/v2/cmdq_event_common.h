@@ -425,12 +425,14 @@ DECLARE_CMDQ_EVENT(CMDQ_SYNC_TOKEN_DELAY_THR30, 500, sw_token)
 DECLARE_CMDQ_EVENT(CMDQ_SYNC_TOKEN_DELAY_THR31, 501, sw_token)
 DECLARE_CMDQ_EVENT(CMDQ_SYNC_TOKEN_TIMER, 502, sw_token)
 
-/* DVFS trigger event -- m95-only token kept from the MT6797 header this
- * file replaced (LOS16 camera/video CMDQ fix, ported to 18.1 2026-09-07).
- * 510 is unused by the donor, so the enum stays collision-free.
+/* event id is 9 bit */
+/*
+ * m95: kept from the previous m95 header. Everything else in this file is the
+ * full BSP event list, which the Flyme libdpframework indexes directly; this
+ * one token exists only here and is referenced by our DVFS code, so dropping
+ * it with the rest of the old numbering would break the build.
  */
 DECLARE_CMDQ_EVENT(CMDQ_SYNC_DVFS_NOTIFY, 510, sw_token)
 
-/* event id is 9 bit */
 DECLARE_CMDQ_EVENT(CMDQ_SYNC_TOKEN_MAX, (0x1FF), max_token)
 DECLARE_CMDQ_EVENT(CMDQ_SYNC_TOKEN_INVALID, (-1), invalid_token)
