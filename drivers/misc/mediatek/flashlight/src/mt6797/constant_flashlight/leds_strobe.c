@@ -348,9 +348,50 @@ MODULE_AUTHOR("pw <pengwei@mediatek.com>");
 MODULE_LICENSE("GPL v2");
 
 
+/*
+ * Adjustable lower bound on the flash brightness index (instrument, m95).
+ *
+ * Port of tools/patches/kernel-flashlight-min-duty-knob.patch, completed: the
+ * patch as filed named min_duty_show/min_duty_store without defining them, so
+ * it could not build. The sysfs half now lives in kd_flashlightlist.c.
+ *
+ * Default 0 == behaviour unchanged. Written through
+ * /sys/class/flashlightdrv/kd_camera_flashlight/min_duty it raises the index
+ * both rails are driven at, so the "is the frame dark because the blob asks
+ * for almost the minimum current?" question can be answered on a live phone
+ * instead of costing a kernel build per attempt. It is an instrument, not a
+ * fix -- the real repair belongs wherever the level should have been computed.
+ */
+int g_minFlashDuty;
+EXPORT_SYMBOL(g_minFlashDuty);
+
+void FL_set_min_duty(int duty)
+{
+	if (duty < 0)
+		duty = 0;
+	if (duty > DUTY_NUM - 1)
+		duty = DUTY_NUM - 1;
+	g_minFlashDuty = duty;
+}
+EXPORT_SYMBOL(FL_set_min_duty);
+
+int FL_get_min_duty(void)
+{
+	return g_minFlashDuty;
+}
+EXPORT_SYMBOL(FL_get_min_duty);
+
+static kal_uint32 FL_clamp_duty(kal_uint32 duty)
+{
+	if (g_minFlashDuty > 0 && duty < (kal_uint32)g_minFlashDuty)
+		return (kal_uint32)g_minFlashDuty;
+	return duty;
+}
+
 int FL_dim_duty_led1(kal_uint32 duty)
 {
     u8 buf[2];
+    duty = FL_clamp_duty(duty);
     if(duty>DUTY_NUM-1)
         duty=DUTY_NUM-1;
     if(duty<0)
@@ -373,6 +414,7 @@ int FL_dim_duty_led1(kal_uint32 duty)
 int FL_dim_duty_led2(kal_uint32 duty)
 {
     u8 buf[2];
+    duty = FL_clamp_duty(duty);
     if(duty>DUTY_NUM-1)
         duty=DUTY_NUM-1;
     if(duty<0)

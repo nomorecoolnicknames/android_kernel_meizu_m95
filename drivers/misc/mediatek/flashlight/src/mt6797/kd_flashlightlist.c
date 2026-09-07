@@ -948,6 +948,43 @@ static ssize_t flash_vendor_store(struct device *dev,
 }
 
 
+/*
+ * min_duty -- lower bound on the flash brightness index, m95 instrument.
+ * The clamp itself lives in constant_flashlight/leds_strobe.c; this is the
+ * sysfs half that tools/patches/kernel-flashlight-min-duty-knob.patch named
+ * but never defined. 0 (default) leaves the driver behaving exactly as before.
+ */
+extern void FL_set_min_duty(int duty);
+extern int FL_get_min_duty(void);
+
+static ssize_t min_duty_show(struct device *dev,
+				struct device_attribute *attr,
+				char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", FL_get_min_duty());
+}
+
+static ssize_t min_duty_store(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t count)
+{
+	int duty = 0;
+
+	if (kstrtoint(buf, 10, &duty))
+		return -EINVAL;
+
+	FL_set_min_duty(duty);
+	logI("[min_duty_store] min flash duty index = %d\n", FL_get_min_duty());
+
+	return count;
+}
+
+static struct device_attribute dev_attr_min_duty = {
+	.attr = {.name = "min_duty", .mode = 0644},
+	.show = min_duty_show,
+	.store = min_duty_store,
+};
+
 static struct device_attribute dev_attr_flash1 = {
 	.attr = {.name = "flash1", .mode = 0644},
 	.show = flash1_show,
@@ -1084,6 +1121,7 @@ static int flashlight_probe(struct platform_device *dev)
 	sema_init(&flashlight_private.sem, 1);
 	/* GPIO pinctrl initial */
 	flashlight_gpio_init(dev);
+	device_create_file(flashlight_device, &dev_attr_min_duty);
 	device_create_file(flashlight_device, &dev_attr_flash1);
 	device_create_file(flashlight_device, &dev_attr_flash2);
 	device_create_file(flashlight_device, &dev_attr_factory_flash);
