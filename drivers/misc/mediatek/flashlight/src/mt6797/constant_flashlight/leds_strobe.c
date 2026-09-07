@@ -621,8 +621,35 @@ static int constant_flashlight_ioctl(unsigned int cmd, unsigned long arg)
 				hrtimer_cancel( &g_timeOutTimer );
     		}
     		break;
+	/*
+	 * "How many milliseconds before the frame should the LED be lit, at this
+	 * duty?" The 3A blob asks this before every flash; nothing in the tree
+	 * implemented it, so the driver answered -EPERM and the blob was left
+	 * with no way to line the flash up with the sensor's exposure window.
+	 * The LEDs did come on -- visible in the kernel trace and to the eye --
+	 * but outside the frame, so a flash shot came out no brighter than one
+	 * without.
+	 *
+	 * FACT (m95, 2026-09-07 18:06, LOS16 note repeats it for 2026-08-18):
+	 * two unhandled commands arrive immediately before FLASH_IOC_ONOFF,
+	 * cmd=0x80045382 nr=130 and cmd=0x80045383 nr=131 -- exactly
+	 * FLASH_IOC_GET_PRE_ON_TIME_MS and _DUTY from kd_flashlight.h.
+	 *
+	 * Zero is not a guess: this driver lights the LED synchronously inside
+	 * FL_Enable and has no separate pre-on stage, so 0 ms describes what it
+	 * actually does. The old error answer was the thing that lied.
+	 */
+	case FLASH_IOC_PRE_ON:
+	case FLASH_IOC_GET_PRE_ON_TIME_MS:
+	case FLASH_IOC_GET_PRE_ON_TIME_MS_DUTY:
+		PK_DBG("FLASH_IOC pre-on nr=%d arg=%d -> 0 ms\n",
+		       (int)_IOC_NR(cmd), (int)arg);
+		i4RetValue = 0;
+		break;
+
 	default :
-    		PK_DBG(" No such command \n");
+    		PK_DBG(" No such command: cmd=0x%08x nr=%d arg=%d\n",
+    		       (unsigned int)cmd, (int)_IOC_NR(cmd), (int)arg);
     		i4RetValue = -EPERM;
     		break;
     }

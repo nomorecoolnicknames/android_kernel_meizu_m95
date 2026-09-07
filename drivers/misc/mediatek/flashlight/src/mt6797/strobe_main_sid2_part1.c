@@ -260,8 +260,21 @@ static int constant_flashlight_ioctl(unsigned int cmd, unsigned long arg)
 		i4RetValue = detLowPowerEnd();
 		break;
 
+	/* Same pre-on answer as constant_flashlight/leds_strobe.c -- both LM3644
+	 * rails get these commands, so both have to answer them. See the comment
+	 * there for why zero is the truthful figure.
+	 */
+	case FLASH_IOC_PRE_ON:
+	case FLASH_IOC_GET_PRE_ON_TIME_MS:
+	case FLASH_IOC_GET_PRE_ON_TIME_MS_DUTY:
+		PK_DBG("FLASH_IOC pre-on nr=%d arg=%d -> 0 ms\n",
+		       (int)_IOC_NR(cmd), (int)arg);
+		i4RetValue = 0;
+		break;
+
 	default:
-		PK_DBG(" No such command\n");
+		PK_DBG(" No such command: cmd=0x%08x nr=%d arg=%d\n",
+		       (unsigned int)cmd, (int)_IOC_NR(cmd), (int)arg);
 		i4RetValue = -EPERM;
 		break;
 	}
