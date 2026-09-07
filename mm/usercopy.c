@@ -90,15 +90,18 @@ static bool overlaps(const void *ptr, unsigned long n, unsigned long low,
 	return true;
 }
 
-/* Is this address range in the kernel text area? */
-static inline const char *check_kernel_text_object(const void *ptr,
-						   unsigned long n)
+/* Is [low,high) -- or its linear-map alias -- hit by [ptr,ptr+n)? */
+static inline const char *check_kernel_text_range(const void *ptr,
+						  unsigned long n,
+						  unsigned long low,
+						  unsigned long high)
 {
-	unsigned long textlow = (unsigned long)_stext;
-	unsigned long texthigh = (unsigned long)_etext;
-	unsigned long textlow_linear, texthigh_linear;
+	unsigned long low_linear, high_linear;
 
-	if (overlaps(ptr, n, textlow, texthigh))
+	if (low >= high)
+		return NULL;
+
+	if (overlaps(ptr, n, low, high))
 		return "<kernel text>";
 
 	/*
@@ -109,17 +112,60 @@ static inline const char *check_kernel_text_object(const void *ptr,
 	 * __pa() is not just the reverse of __va(). This can be detected
 	 * and checked:
 	 */
-	textlow_linear = (unsigned long)__va(__pa(textlow));
+	low_linear = (unsigned long)__va(__pa(low));
 	/* No different mapping: we're done. */
-	if (textlow_linear == textlow)
+	if (low_linear == low)
 		return NULL;
 
 	/* Check the secondary mapping... */
-	texthigh_linear = (unsigned long)__va(__pa(texthigh));
-	if (overlaps(ptr, n, textlow_linear, texthigh_linear))
+	high_linear = (unsigned long)__va(__pa(high));
+	if (overlaps(ptr, n, low_linear, high_linear))
 		return "<linear kernel text>";
 
 	return NULL;
+}
+
+/*
+ * Is this address range in the kernel text area?
+ *
+ * Upstream assumes [_stext,_etext) contains only executable text, because on
+ * the architectures it was written for RO_DATA is linked after _etext. That is
+ * NOT true on arm64 before the _etext/RO_DATA split (mainline 4.6): this tree's
+ * arch/arm64/kernel/vmlinux.lds.S puts RO_DATA *inside* the range and says so --
+ *	_etext = .;   with the comment "End of text and rodata section".
+ * With the naive range every copy_to_user() of a string literal is reported as
+ * a text exposure. On m95 that killed boot30 in init at 4.855 s:
+ *	usercopy: kernel memory exposure attempt detected from
+ *	ffffffc0010b53d0 (<kernel text>) (1 bytes)
+ * filldir64 <- kernfs_fop_readdir <- iterate_dir <- SyS_getdents64, i.e. the
+ * one-byte "." name that dir_emit_dots() hands out of .rodata
+ * (__start_rodata=ffffffc000ca2000, __end_rodata=ffffffc0012bf000).
+ *
+ * So carve the read-only data out of the range and reproduce the mainline
+ * semantics "text does not include rodata". The alternative -- backporting the
+ * arm64 linker change that moves _etext ahead of RO_DATA -- would also resize
+ * the RO/NX mapping built from _etext-_stext in arch/arm64/mm/mmu.c and the
+ * kernel_code resource in setup.c, which is a much larger blast radius for no
+ * extra protection here.
+ */
+static inline const char *check_kernel_text_object(const void *ptr,
+						   unsigned long n)
+{
+	unsigned long textlow = (unsigned long)_stext;
+	unsigned long texthigh = (unsigned long)_etext;
+	unsigned long rodatalow = (unsigned long)__start_rodata;
+	unsigned long rodatahigh = (unsigned long)__end_rodata;
+	const char *err;
+
+	/* Does this arch link RO_DATA inside [_stext,_etext)? */
+	if (rodatalow >= textlow && rodatahigh <= texthigh) {
+		err = check_kernel_text_range(ptr, n, textlow, rodatalow);
+		if (err)
+			return err;
+		return check_kernel_text_range(ptr, n, rodatahigh, texthigh);
+	}
+
+	return check_kernel_text_range(ptr, n, textlow, texthigh);
 }
 
 static inline const char *check_bogus_address(const void *ptr, unsigned long n)
