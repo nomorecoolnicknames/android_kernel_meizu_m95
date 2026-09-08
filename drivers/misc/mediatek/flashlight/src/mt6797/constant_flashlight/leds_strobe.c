@@ -380,6 +380,66 @@ EXPORT_SYMBOL(g_minFlashDuty);
 int g_torchTimeoutMs = 10000;
 EXPORT_SYMBOL(g_torchTimeoutMs);
 
+/*
+ * flash_pulse -- the second half of the flash-mode repair, off by default.
+ *
+ * With g_flashPulse == 0 every line below behaves exactly as kernel #85 did,
+ * which is the build that measures 130.5 mean luminance on the reference dark
+ * scene; nothing here may move that number. Set to 1 (together with
+ * torch_timeout_ms > 20000, which is what puts the capture into flash mode at
+ * all) it turns on two things the vendor driver is missing:
+ *
+ *   a) both LM3644 rails decide the mode from their own
+ *      FLASH_IOC_SET_TIME_OUT_TIME_MS instead of one rail deciding for both
+ *      (see FL_set_mode_from_timeout), and
+ *   b) FL_Enable_led1/2 write gFlashDuty[] into REG_FLASH_LEDx_BR themselves
+ *      instead of waiting for a FLASH_IOC_SET_DUTY the capture never sends
+ *      (see FL_latch_flash_duty_led1/2).
+ *
+ * FACT (m95, 2026-09-07 23:35 and 23:48, kernel #84/#85): with flash mode on
+ * and this path absent, the frame measures 75.5 and does not move when
+ * min_duty goes from 5 to 25 -- because REG_FLASH_LEDx_BR is never written by
+ * anyone, so the LED burns whatever the chip powered up with and the brightness
+ * index is irrelevant. That is the hole (b) fills.
+ */
+int g_flashPulse;
+EXPORT_SYMBOL(g_flashPulse);
+
+void FL_set_flash_pulse(int on)
+{
+	g_flashPulse = on ? 1 : 0;
+}
+EXPORT_SYMBOL(FL_set_flash_pulse);
+
+int FL_get_flash_pulse(void)
+{
+	return g_flashPulse;
+}
+EXPORT_SYMBOL(FL_get_flash_pulse);
+
+/*
+ * The torch/flash rule, in one place, so that both rails can apply it to the
+ * one flag.
+ *
+ * FACT (source, this tree): there is exactly one torch_flag in the built
+ * kernel -- the static above. constant_flashlight/leds_control.c defines a
+ * global of the same name and strobe_main_sid2_part1.c declares it extern, but
+ * leds_control.c is not in constant_flashlight/Makefile, so that declaration
+ * binds to nothing and the second rail never had a mode of its own: it read
+ * whatever the first rail's last SET_TIME_OUT_TIME_MS had left behind. That,
+ * plus the complete absence of locking in flashlight_ioctl_core, is the
+ * mechanism behind the traces where FL_dim_duty_led2 printed "flash mode" and
+ * FL_Enable_led2 printed "torch mode" two lines later.
+ */
+void FL_set_mode_from_timeout(unsigned long arg)
+{
+	if (arg == 0 || arg > (unsigned long)g_torchTimeoutMs)
+		torch_flag = true;
+	else
+		torch_flag = false;
+}
+EXPORT_SYMBOL(FL_set_mode_from_timeout);
+
 void FL_set_torch_timeout(int ms)
 {
 	if (ms < 0)
@@ -432,9 +492,65 @@ static kal_uint32 FL_clamp_duty(kal_uint32 duty)
 	return duty;
 }
 
+/*
+ * The last index each rail was ASKED for, before clamping -- [0] is led1, [1]
+ * is led2.
+ *
+ * Unclamped on purpose. A capture is metered by the 3A thread while the driver
+ * is still in torch mode, so the value that reached the chip was clamped to the
+ * six-entry torch table; re-clamping the raw request at enable time is what
+ * lets min_duty reach the 39-entry flash table. Without this, "min_duty 20" in
+ * flash mode would still come out as index 5.
+ */
+static int gRawDuty[2];
+
+/*
+ * Write gFlashDuty[] into the flash brightness register for one rail.
+ *
+ * FACT (m95 trace, 2026-09-07 23:35-23:48): the capture thread Cam@P1NodeImp
+ * sends only SET_TIME_OUT_TIME_MS and SET_ONOFF. FLASH_IOC_SET_DUTY comes from
+ * the 3A pre-flash thread, and it arrives while the driver is in torch mode,
+ * so it lands in REG_TORCH_LEDx_BR. Nothing in the shipped code path ever
+ * writes REG_FLASH_LEDx_BR, which is why flash mode was darker than torch mode
+ * and why raising min_duty did not move it. These two helpers close that.
+ */
+static void FL_latch_flash_duty_led1(void)
+{
+	u8 buf[2];
+	kal_uint32 duty = FL_clamp_duty((kal_uint32)gRawDuty[0]);
+
+	buf[0] = REG_FLASH_LED1_BR;
+	buf[1] = gFlashDuty[duty];
+	LM3644_write_reg(LM3644_i2c_client, buf[0], buf[1]);
+	PK_DBG("[LM3644] latch led1 flash duty=0x%X (index %d),flash mode\n",
+	       buf[1], (int)duty);
+}
+
+static void FL_latch_flash_duty_led2(void)
+{
+	u8 buf[2];
+	kal_uint32 duty = FL_clamp_duty((kal_uint32)gRawDuty[1]);
+
+	/* same bit7 dance as the flash branch of FL_dim_duty_led2: LED1's
+	 * brightness register ganges both rails while bit7 is set, so it has
+	 * to be cleared before LED2 gets a value of its own.
+	 */
+	buf[0] = REG_FLASH_LED1_BR;
+	buf[1] = LM3644_read_reg(LM3644_i2c_client, buf[0]);
+	buf[1] = buf[1] & 0x7f;
+	LM3644_write_reg(LM3644_i2c_client, buf[0], buf[1]);
+
+	buf[0] = REG_FLASH_LED2_BR;
+	buf[1] = gFlashDuty[duty];
+	LM3644_write_reg(LM3644_i2c_client, buf[0], buf[1]);
+	PK_DBG("[LM3644] latch led2 flash duty=0x%X (index %d),flash mode\n",
+	       buf[1], (int)duty);
+}
+
 int FL_dim_duty_led1(kal_uint32 duty)
 {
     u8 buf[2];
+    gRawDuty[0] = (int)duty;
     duty = FL_clamp_duty(duty);
     if(duty>DUTY_NUM-1)
         duty=DUTY_NUM-1;
@@ -458,6 +574,7 @@ int FL_dim_duty_led1(kal_uint32 duty)
 int FL_dim_duty_led2(kal_uint32 duty)
 {
     u8 buf[2];
+    gRawDuty[1] = (int)duty;
     duty = FL_clamp_duty(duty);
     if(duty>DUTY_NUM-1)
         duty=DUTY_NUM-1;
@@ -496,6 +613,10 @@ int FL_Enable_led1(void)
 {
 	
     u8 buf[2];
+
+    if (g_flashPulse && !torch_flag)
+        FL_latch_flash_duty_led1();
+
     buf[0]=REG_ENABLE;
     buf[1]=LM3644_read_reg(LM3644_i2c_client,buf[0]);
 
@@ -518,6 +639,10 @@ int FL_Enable_led2(void)
 {
 	
     u8 buf[2];
+
+    if (g_flashPulse && !torch_flag)
+        FL_latch_flash_duty_led2();
+
     buf[0]=REG_ENABLE;
     buf[1]=LM3644_read_reg(LM3644_i2c_client,buf[0]);
     
@@ -692,10 +817,7 @@ static int constant_flashlight_ioctl(unsigned int cmd, unsigned long arg)
 		 * puts the capture into flash mode for one experiment, with no
 		 * kernel build, and answers that.
 		 */
-		if (arg == 0 || arg > (unsigned long)g_torchTimeoutMs)
-			torch_flag = true;
-		else
-			torch_flag = false;
+		FL_set_mode_from_timeout(arg);
 		g_timeOutTimeMs=arg;
 		break;
 

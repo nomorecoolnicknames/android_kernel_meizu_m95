@@ -56,8 +56,24 @@
 #endif
 
 extern bool led1_onoff;
-extern bool torch_flag;
 extern int led1_duty;
+
+/*
+ * No "extern bool torch_flag" here on purpose. This file used to declare one;
+ * it never referenced it, and it could not have referenced the flag that
+ * matters: the mode flag this rail's LED is actually switched by is the static
+ * torch_flag inside constant_flashlight/leds_strobe.c. The only non-static
+ * torch_flag in the tree lives in constant_flashlight/leds_control.c, which is
+ * not built (constant_flashlight/Makefile lists leds_strobe.o alone).
+ *
+ * So this rail had no mode of its own and inherited whatever the other rail's
+ * last SET_TIME_OUT_TIME_MS left in that static -- the divergence recorded in
+ * A11_BRINGUP_STATE.md, where one rail's brightness was written to the flash
+ * register and its enable was done with the torch bits. FL_set_mode_from_timeout
+ * below applies the one rule to the one flag from both rails.
+ */
+extern void FL_set_mode_from_timeout(unsigned long arg);
+extern int FL_get_flash_pulse(void);
 
 int led2_duty;
 
@@ -187,6 +203,15 @@ static int constant_flashlight_ioctl(unsigned int cmd, unsigned long arg)
 
 	case FLASH_IOC_SET_TIME_OUT_TIME_MS:
 		PK_DBG("FLASH_IOC_SET_TIME_OUT_TIME_MS: %d\n", (int)arg);
+		/*
+		 * Gated: with flash_pulse off this rail stays silent about the
+		 * mode, exactly as the shipped kernel, so the 130.5 frame
+		 * cannot move. With it on, both rails write the same flag
+		 * through the same rule and the mode stops depending on which
+		 * rail was served last.
+		 */
+		if (FL_get_flash_pulse())
+			FL_set_mode_from_timeout(arg);
 		g_timeOutTimeMs = arg;
 		break;
 

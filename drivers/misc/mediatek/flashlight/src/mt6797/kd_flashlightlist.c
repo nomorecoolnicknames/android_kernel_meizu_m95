@@ -1011,6 +1011,48 @@ static ssize_t torch_timeout_store(struct device *dev,
 	return count;
 }
 
+/*
+ * flash_pulse -- arms the flash-mode path in constant_flashlight/leds_strobe.c:
+ * one mode flag written by both LM3644 rails, and gFlashDuty[] latched into
+ * REG_FLASH_LEDx_BR at enable time. 0 (default) is the shipped behaviour.
+ * The experiment it exists for is
+ *   echo 60000 > torch_timeout_ms   (capture is filed as flash, not torch)
+ *   echo 1     > flash_pulse        (and the flash brightness actually reaches
+ *                                    the chip)
+ *   echo 20    > min_duty           (492 mA; the flash table runs to 996 mA)
+ * measured against the 130.5 mean luminance the torch path gives today.
+ */
+extern void FL_set_flash_pulse(int on);
+extern int FL_get_flash_pulse(void);
+
+static ssize_t flash_pulse_show(struct device *dev,
+				struct device_attribute *attr,
+				char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", FL_get_flash_pulse());
+}
+
+static ssize_t flash_pulse_store(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t count)
+{
+	int on = 0;
+
+	if (kstrtoint(buf, 10, &on))
+		return -EINVAL;
+
+	FL_set_flash_pulse(on);
+	logI("[flash_pulse_store] flash pulse path = %d\n", FL_get_flash_pulse());
+
+	return count;
+}
+
+static struct device_attribute dev_attr_flash_pulse = {
+	.attr = {.name = "flash_pulse", .mode = 0644},
+	.show = flash_pulse_show,
+	.store = flash_pulse_store,
+};
+
 static struct device_attribute dev_attr_torch_timeout = {
 	.attr = {.name = "torch_timeout_ms", .mode = 0644},
 	.show = torch_timeout_show,
@@ -1161,6 +1203,7 @@ static int flashlight_probe(struct platform_device *dev)
 	flashlight_gpio_init(dev);
 	device_create_file(flashlight_device, &dev_attr_min_duty);
 	device_create_file(flashlight_device, &dev_attr_torch_timeout);
+	device_create_file(flashlight_device, &dev_attr_flash_pulse);
 	device_create_file(flashlight_device, &dev_attr_flash1);
 	device_create_file(flashlight_device, &dev_attr_flash2);
 	device_create_file(flashlight_device, &dev_attr_factory_flash);
