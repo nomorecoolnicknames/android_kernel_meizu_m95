@@ -737,8 +737,16 @@ static int verity_ctr(struct dm_target *ti, unsigned argc, char **argv)
 		goto bad;
 	}
 
-	if (argc < 10 || argc > 11) {
-		ti->error = "Invalid argument count: 10-11 arguments required";
+	/* m95 (A13 GSI, 2026-09-09): Android 13 avbtool emits the upstream
+	 * opt_params tail (<#opt_params> <opt>...), e.g. "1 check_at_most_once",
+	 * which is 12+ args. This 3.18 variant only knows 10 args plus an
+	 * MTK "mode" at argv[10]; reject fewer than 10 and ignore any tail
+	 * beyond argv[10] (verity then always checks -- correct, just no
+	 * skip-after-first-failure optimisation). Without this every apex
+	 * fails to activate ("Failed to activate dm device") and zygote dies
+	 * on missing libnativeloader from the art apex. */
+	if (argc < 10) {
+		ti->error = "Invalid argument count: 10+ arguments required";
 		r = -EINVAL;
 		goto bad;
 	}

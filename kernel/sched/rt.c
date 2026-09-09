@@ -1093,7 +1093,10 @@ static int sched_rt_runtime_exceeded(struct rt_rq *rt_rq)
 					cpu, rt_rq->rt_throttled);
 			per_cpu(rt_throttling_start, cpu) = rq_clock_task(rt_rq->rq);
 #endif
-#ifdef CONFIG_MT_RT_THROTTLE_MON
+/* m95 (A13 GSI): this monitor block uses the cpu declared inside the
+ * CONFIG_RT_GROUP_SCHED block above; without RT_GROUP_SCHED it does not
+ * compile. Skip it there (MTK bug, not ours). */
+#if defined(CONFIG_MT_RT_THROTTLE_MON) && defined(CONFIG_RT_GROUP_SCHED)
 			/* sched:rt throttle monitor */
 			mt_rt_mon_switch(MON_STOP, cpu);
 			mt_rt_mon_print_task(cpu);
