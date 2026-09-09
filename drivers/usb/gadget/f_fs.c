@@ -1195,9 +1195,9 @@ static int ffs_aio_cancel(struct kiocb *kiocb)
 	return value;
 }
 
-static ssize_t ffs_epfile_aio_write(struct kiocb *kiocb,
-				    const struct iovec *iov,
-				    unsigned long nr_segs, loff_t pos)
+static ssize_t __maybe_unused
+ffs_epfile_aio_write(struct kiocb *kiocb, const struct iovec *iov,
+		     unsigned long nr_segs, loff_t pos)
 {
 	struct ffs_io_data *io_data;
 	ssize_t ret;
@@ -1227,9 +1227,9 @@ static ssize_t ffs_epfile_aio_write(struct kiocb *kiocb,
 	return ret;
 }
 
-static ssize_t ffs_epfile_aio_read(struct kiocb *kiocb,
-				   const struct iovec *iov,
-				   unsigned long nr_segs, loff_t pos)
+static ssize_t __maybe_unused
+ffs_epfile_aio_read(struct kiocb *kiocb, const struct iovec *iov,
+		    unsigned long nr_segs, loff_t pos)
 {
 	struct ffs_io_data *io_data;
 	struct iovec *iov_copy;
@@ -1349,8 +1349,15 @@ static const struct file_operations ffs_epfile_operations = {
 	.open =		ffs_epfile_open,
 	.write =	ffs_epfile_write,
 	.read =		ffs_epfile_read,
+	/*
+	 * Only when the kernel has AIO at all: without it aio_complete() is a
+	 * stub, and readv()/writev() (which also reach ->aio_read) would return
+	 * -EIOCBQUEUED to a wait_on_sync_kiocb() that never gets a result.
+	 */
+#ifdef CONFIG_AIO
 	.aio_write =	ffs_epfile_aio_write,
 	.aio_read =	ffs_epfile_aio_read,
+#endif
 	.release =	ffs_epfile_release,
 	.unlocked_ioctl =	ffs_epfile_ioctl,
 };
