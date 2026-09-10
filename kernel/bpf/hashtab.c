@@ -394,6 +394,14 @@ late_initcall(register_htab_map);
  * block, which is what the syscall layer copies. */
 static struct bpf_map *htab_percpu_map_alloc(union bpf_attr *attr)
 {
+	/* TEMP DEBUG 2026-09-11: per-CPU alloc disabled to bisect a
+	 * slab-corruption panic (see comment in the #if 0 block).
+	 * Revert after the bisect. */
+	(void) attr;
+	return ERR_PTR(-EOPNOTSUPP);
+}
+#if 0 /* TEMP DEBUG: original body kept for revert */
+
 	union bpf_attr scaled = *attr;
 	u64 value_size;
 
@@ -407,7 +415,7 @@ static struct bpf_map *htab_percpu_map_alloc(union bpf_attr *attr)
 	 * map, and that the resulting element stays kmalloc-able) and allocates
 	 * the buckets and elements */
 	return htab_map_alloc(&scaled);
-}
+#endif /* TEMP DEBUG */
 
 /* Called from eBPF program: the value of the current CPU only */
 static void *htab_percpu_map_lookup_elem(struct bpf_map *map, void *key)

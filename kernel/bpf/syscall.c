@@ -583,13 +583,6 @@ static int bpf_prog_load(union bpf_attr *attr)
 	if (CHECK_ATTR(BPF_PROG_LOAD))
 		return -EINVAL;
 
-	/* Bring-up debug (2026-09-11): log every program load request so a
-	 * loader/kernel ABI mismatch shows up in dmesg instead of requiring
-	 * guesswork.  Remove once netd.o loads. */
-	pr_info("bpf: PROG_LOAD type=%u insns=%u attach=%u flags=%u log=%u/%u kver=%u\n",
-		attr->prog_type, attr->insn_cnt, attr->expected_attach_type,
-		attr->prog_flags, attr->log_level, attr->log_size,
-		attr->kern_version);
 
 	/* 4.4 semantics: loading anything but a socket filter is privileged. */
 	if (type != BPF_PROG_TYPE_SOCKET_FILTER && !capable(CAP_SYS_ADMIN))
@@ -632,9 +625,6 @@ static int bpf_prog_load(union bpf_attr *attr)
 
 	/* run eBPF verifier */
 	err = bpf_check(prog, attr);
-	/* TEMP DEBUG 2026-09-11: pinpoint the egress E2BIG, remove after. */
-	pr_info("bpf: check type=%u insns=%u -> %d\n", type, attr->insn_cnt,
-		err);
 
 	if (err < 0)
 		goto free_used_maps;

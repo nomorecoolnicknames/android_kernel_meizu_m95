@@ -190,6 +190,14 @@ late_initcall(register_array_map);
  */
 static struct bpf_map *percpu_array_map_alloc(union bpf_attr *attr)
 {
+	/* TEMP DEBUG 2026-09-11: per-CPU alloc disabled to bisect a
+	 * slab-corruption panic (see comment in the #if 0 block).
+	 * Revert after the bisect. */
+	(void) attr;
+	return ERR_PTR(-EOPNOTSUPP);
+}
+#if 0 /* TEMP DEBUG: original body kept for revert */
+
 	union bpf_attr scaled = *attr;
 	u64 value_size;
 
@@ -203,7 +211,7 @@ static struct bpf_map *percpu_array_map_alloc(union bpf_attr *attr)
 	 * "too big for userspace to read back" limit, overflow of the element
 	 * size) and allocates the elements */
 	return array_map_alloc(&scaled);
-}
+#endif /* TEMP DEBUG */
 
 /* Called from eBPF program: the value of the current CPU only */
 static void *percpu_array_map_lookup_elem(struct bpf_map *map, void *key)

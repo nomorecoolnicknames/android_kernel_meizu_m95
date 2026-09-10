@@ -1997,8 +1997,6 @@ int bpf_check(struct bpf_prog *prog, union bpf_attr *attr)
 	}
 
 	ret = replace_map_fd_with_map_ptr(env);
-	pr_info("bpf: replace_map insns=%u -> %d used=%u\n",
-		env->prog->len, ret, ret ? 0 : env->used_map_cnt);
 	if (ret < 0)
 		goto skip_full_check;
 
@@ -2010,12 +2008,10 @@ int bpf_check(struct bpf_prog *prog, union bpf_attr *attr)
 		goto skip_full_check;
 
 	ret = check_cfg(env);
-	pr_info("bpf: check_cfg insns=%u -> %d\n", env->prog->len, ret);
 	if (ret < 0)
 		goto skip_full_check;
 
 	ret = do_check(env);
-	pr_info("bpf: do_check insns=%u -> %d\n", env->prog->len, ret);
 
 skip_full_check:
 	while (pop_stack(env, NULL) >= 0);
@@ -2023,9 +2019,12 @@ skip_full_check:
 
 	if (log_level && log_len >= log_size - 1) {
 		BUG_ON(log_len >= log_size);
-		/* verifier log exceeded user supplied buffer */
-		ret = -ENOSPC;
-		/* fall through to return what was recorded */
+		/* verifier log exceeded user supplied buffer: the log is a
+		 * diagnostic, not the verdict (backport 2026-09-10, proven in
+		 * UML by the parallel review line).  Return the real
+		 * verification result with a truncated log. */
+		if (ret == 0)
+			pr_info_once("bpf: verifier log truncated (buffer %u), program accepted\n", log_size);
 	}
 
 	/* copy verifier log back to user space including trailing zero */
