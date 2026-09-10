@@ -76,4 +76,9 @@
 #define ANON_INODE_FS_MAGIC	0x09041934
 #define BTRFS_TEST_MAGIC	0x73727279
 
+/* bpf filesystem, used by eBPF object pinning (backport 2026-09-10).
+ * The value is ABI: Android 13 userspace (libbpf_bcc, libgpuwork, netd)
+ * statfs()es /sys/fs/bpf and requires exactly this magic. */
+#define BPF_FS_MAGIC		0xcafe4a11
+
 #endif /* __LINUX_MAGIC_H__ */

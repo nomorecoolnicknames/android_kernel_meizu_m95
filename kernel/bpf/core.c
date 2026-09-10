@@ -646,6 +646,27 @@ static void bpf_prog_free_deferred(struct work_struct *work)
 }
 
 /* Free internal BPF program */
+/* From 4.4: a prog_array is owned by the first program stored in it, and every
+ * later program must match its type and JIT state.  Android's bpfloader relies
+ * on the check to reject mismatched programs instead of failing at tail-call
+ * time (backport 2026-09-10). */
+bool bpf_prog_array_compatible(struct bpf_array *array,
+			       const struct bpf_prog *fp)
+{
+	if (!array->owner_prog_type) {
+		/* There's no owner yet where we could check for
+		 * compatibility.
+		 */
+		array->owner_prog_type = fp->aux->prog_type;
+		array->owner_jited = fp->jited;
+
+		return true;
+	}
+
+	return array->owner_prog_type == fp->aux->prog_type &&
+	       array->owner_jited == fp->jited;
+}
+
 void bpf_prog_free(struct bpf_prog *fp)
 {
 	struct bpf_prog_aux *aux = fp->aux;

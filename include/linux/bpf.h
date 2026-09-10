@@ -20,10 +20,17 @@ struct bpf_map_ops {
 	void (*map_free)(struct bpf_map *);
 	int (*map_get_next_key)(struct bpf_map *map, void *key, void *next_key);
 
-	/* funcs callable from userspace and from eBPF programs */
+	/* funcs callable from userspace and from eBPF programs.
+	 * The update prototype carries the BPF_ANY/BPF_NOEXIST/BPF_EXIST flag,
+	 * as in 4.4 - the map implementations ported from there rely on it. */
 	void *(*map_lookup_elem)(struct bpf_map *map, void *key);
-	int (*map_update_elem)(struct bpf_map *map, void *key, void *value);
+	int (*map_update_elem)(struct bpf_map *map, void *key, void *value,
+			       u64 flags);
 	int (*map_delete_elem)(struct bpf_map *map, void *key);
+
+	/* funcs called by prog_array and perf_event_array map */
+	void *(*map_fd_get_ptr)(struct bpf_map *map, int fd);
+	void (*map_fd_put_ptr)(void *ptr);
 };
 
 struct bpf_map {
@@ -32,19 +39,52 @@ struct bpf_map {
 	u32 key_size;
 	u32 value_size;
 	u32 max_entries;
-	struct bpf_map_ops *ops;
+	u32 pages;		/* memory footprint, reported by the map impls */
+	const struct bpf_map_ops *ops;
 	struct work_struct work;
+};
+
+/* Array of arbitrary sized elements, optionally an array of map/program fds
+ * (BPF_MAP_TYPE_PROG_ARRAY / PERF_EVENT_ARRAY / CGROUP_ARRAY). */
+struct bpf_array {
+	struct bpf_map map;
+	u32 elem_size;
+	enum bpf_prog_type owner_prog_type;
+	bool owner_jited;
+	union {
+		char value[0] __aligned(8);
+		void *ptrs[0] __aligned(8);
+		void __percpu *pptrs[0] __aligned(8);
+	};
 };
 
 struct bpf_map_type_list {
 	struct list_head list_node;
-	struct bpf_map_ops *ops;
+	const struct bpf_map_ops *ops;
 	enum bpf_map_type type;
 };
 
 void bpf_register_map_type(struct bpf_map_type_list *tl);
 void bpf_map_put(struct bpf_map *map);
 struct bpf_map *bpf_map_get(struct fd f);
+
+/* Object pinning / bpffs support (backport 2026-09-10). */
+struct bpf_map *bpf_map_inc(struct bpf_map *map, bool uref);
+void bpf_map_put_with_uref(struct bpf_map *map);
+struct bpf_map *bpf_map_get_with_uref(u32 ufd);
+int bpf_map_new_fd(struct bpf_map *map);
+struct bpf_prog *bpf_prog_inc(struct bpf_prog *prog);
+int bpf_prog_new_fd(struct bpf_prog *prog);
+bool bpf_prog_array_compatible(struct bpf_array *array,
+			       const struct bpf_prog *fp);
+void bpf_prog_put_rcu(struct bpf_prog *prog);
+int bpf_obj_pin_user(u32 ufd, const char __user *pathname);
+int bpf_obj_get_user(const char __user *pathname);
+
+/* The pinned objects are handed out as ordinary bpf fds, so the bpf
+ * filesystem uses these very file_operations on its inodes. */
+extern const struct file_operations bpf_map_fops;
+extern const struct file_operations bpf_prog_fops;
 
 /* function argument constraints */
 enum bpf_arg_type {
