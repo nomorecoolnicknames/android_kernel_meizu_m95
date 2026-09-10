@@ -22,12 +22,14 @@
 #include <linux/seq_file.h>
 #include <linux/kernfs.h>
 #include <linux/wait.h>
+#include <uapi/linux/bpf.h>
 
 #ifdef CONFIG_CGROUPS
 
 struct cgroup_root;
 struct cgroup_subsys;
 struct cgroup;
+struct bpf_prog;
 
 extern int cgroup_init_early(void);
 extern int cgroup_init(void);
@@ -236,12 +238,25 @@ struct cgroup {
 	struct list_head pidlists;
 	struct mutex pidlist_mutex;
 
+	/* eBPF bring-up stub (2026-09-11): programs attached through
+	 * BPF_PROG_ATTACH are stored here, one slot per attach type, and
+	 * never executed - this 3.18 kernel has no cgroup-bpf run path (no
+	 * packet-path hooks, no effective-prog computation).  Non-root
+	 * cgroups come from kzalloc in cgroup_mkdir(), so the slots start
+	 * NULL without an init hook; kernel/cgroup.c drops the stored
+	 * references through cgroup_bpf_stub_release() before freeing. */
+	struct bpf_prog *bpf_stub_progs[__MAX_BPF_ATTACH_TYPE];
+
 	/* used to wait for offlining of csses */
 	wait_queue_head_t offline_waitq;
 
 	/* used to schedule release agent */
 	struct work_struct release_agent_work;
 };
+
+/* Drop the BPF_PROG_ATTACH references stored on @cgrp (defined in
+ * kernel/bpf/cgroup_stub.c, called from kernel/cgroup.c destroy paths). */
+extern void cgroup_bpf_stub_release(struct cgroup *cgrp);
 
 #define MAX_CGROUP_ROOT_NAMELEN 64
 

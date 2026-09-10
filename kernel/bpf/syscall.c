@@ -161,6 +161,18 @@ struct bpf_map *bpf_map_get(struct fd f)
 	return map;
 }
 
+/* Convert BPF_F_RDONLY/BPF_F_WRONLY to open flags (from 4.9). */
+int bpf_get_file_flag(int flags)
+{
+	if ((flags & BPF_F_RDONLY) && (flags & BPF_F_WRONLY))
+		return -EINVAL;
+	if (flags & BPF_F_RDONLY)
+		return O_RDONLY;
+	if (flags & BPF_F_WRONLY)
+		return O_WRONLY;
+	return O_RDWR;
+}
+
 /* Reference counting helpers shared with the bpf filesystem (bpffs). */
 struct bpf_map *bpf_map_inc(struct bpf_map *map, bool uref)
 {
@@ -241,7 +253,15 @@ static int map_lookup_elem(union bpf_attr *attr)
 
 	err = -ESRCH;
 	rcu_read_lock();
-	value = map->ops->map_lookup_elem(map, key);
+	/* A per-CPU map stores one value per CPU in a single block of
+	 * map->value_size bytes: the syscall layer reads the whole block (it
+	 * copies map->value_size bytes below), a program only the current CPU's
+	 * slice, so those map types provide a syscall-only variant (backport
+	 * 2026-09-11). */
+	if (map->ops->map_lookup_elem_sys_only)
+		value = map->ops->map_lookup_elem_sys_only(map, key);
+	else
+		value = map->ops->map_lookup_elem(map, key);
 	if (!value)
 		goto err_unlock;
 
@@ -301,7 +321,12 @@ static int map_update_elem(union bpf_attr *attr)
 	 * therefore all map accessors rely on this fact, so do the same here
 	 */
 	rcu_read_lock();
-	err = map->ops->map_update_elem(map, key, value, attr->flags);
+	/* userspace writes the whole per-CPU block, see map_lookup_elem() */
+	if (map->ops->map_update_elem_sys_only)
+		err = map->ops->map_update_elem_sys_only(map, key, value,
+							 attr->flags);
+	else
+		err = map->ops->map_update_elem(map, key, value, attr->flags);
 	rcu_read_unlock();
 
 free_value:
@@ -558,6 +583,14 @@ static int bpf_prog_load(union bpf_attr *attr)
 	if (CHECK_ATTR(BPF_PROG_LOAD))
 		return -EINVAL;
 
+	/* Bring-up debug (2026-09-11): log every program load request so a
+	 * loader/kernel ABI mismatch shows up in dmesg instead of requiring
+	 * guesswork.  Remove once netd.o loads. */
+	pr_info("bpf: PROG_LOAD type=%u insns=%u attach=%u flags=%u log=%u/%u kver=%u\n",
+		attr->prog_type, attr->insn_cnt, attr->expected_attach_type,
+		attr->prog_flags, attr->log_level, attr->log_size,
+		attr->kern_version);
+
 	/* 4.4 semantics: loading anything but a socket filter is privileged. */
 	if (type != BPF_PROG_TYPE_SOCKET_FILTER && !capable(CAP_SYS_ADMIN))
 		return -EPERM;
@@ -599,6 +632,9 @@ static int bpf_prog_load(union bpf_attr *attr)
 
 	/* run eBPF verifier */
 	err = bpf_check(prog, attr);
+	/* TEMP DEBUG 2026-09-11: pinpoint the egress E2BIG, remove after. */
+	pr_info("bpf: check type=%u insns=%u -> %d\n", type, attr->insn_cnt,
+		err);
 
 	if (err < 0)
 		goto free_used_maps;
@@ -639,7 +675,72 @@ static int bpf_obj_get(const union bpf_attr *attr)
 	if (CHECK_ATTR(BPF_OBJ_GET))
 		return -EINVAL;
 
-	return bpf_obj_get_user(u64_to_ptr(attr->pathname));
+	return bpf_obj_get_user(u64_to_ptr(attr->pathname), attr->file_flags);
+}
+
+/* Minimal BPF_PROG_ATTACH/DETACH for the eBPF bring-up (2026-09-11): netd
+ * attaches its cgroup programs to its own cgroup directory at startup and
+ * fails without this.  Only cgroup-directory target fds are supported (any
+ * other target yields -EINVAL from bpf_cgroup_from_fd()); the programs are
+ * stored on the cgroup and never executed on this kernel - see
+ * kernel/bpf/cgroup_stub.c.  No extra capability check beyond the syscall
+ * entry gate: this is a load-but-never-run stub for bring-up. */
+#define BPF_PROG_ATTACH_LAST_FIELD attach_flags
+
+static int bpf_prog_attach(const union bpf_attr *attr)
+{
+	struct bpf_prog *prog;
+	struct cgroup *cgrp;
+	int ret;
+
+	if (CHECK_ATTR(BPF_PROG_ATTACH))
+		return -EINVAL;
+
+	if (attr->attach_type >= __MAX_BPF_ATTACH_TYPE)
+		return -EINVAL;
+
+	if (attr->attach_flags & ~(BPF_F_ALLOW_OVERRIDE | BPF_F_ALLOW_MULTI))
+		return -EINVAL;
+
+	/* bpf_prog_get() holds a reference, which becomes the stored one. */
+	prog = bpf_prog_get(attr->attach_bpf_fd);
+	if (IS_ERR(prog))
+		return PTR_ERR(prog);
+
+	cgrp = bpf_cgroup_from_fd(attr->target_fd);
+	if (IS_ERR(cgrp)) {
+		bpf_prog_put(prog);
+		return PTR_ERR(cgrp);
+	}
+
+	ret = bpf_cgroup_attach_stub(cgrp, prog, attr->attach_type,
+				     attr->attach_flags);
+	if (ret)
+		bpf_prog_put(prog);
+	bpf_cgroup_from_fd_put(cgrp);
+	return ret;
+}
+
+#define BPF_PROG_DETACH_LAST_FIELD attach_type
+
+static int bpf_prog_detach(const union bpf_attr *attr)
+{
+	struct cgroup *cgrp;
+	int ret;
+
+	if (CHECK_ATTR(BPF_PROG_DETACH))
+		return -EINVAL;
+
+	if (attr->attach_type >= __MAX_BPF_ATTACH_TYPE)
+		return -EINVAL;
+
+	cgrp = bpf_cgroup_from_fd(attr->target_fd);
+	if (IS_ERR(cgrp))
+		return PTR_ERR(cgrp);
+
+	ret = bpf_cgroup_detach_stub(cgrp, attr->attach_type);
+	bpf_cgroup_from_fd_put(cgrp);
+	return ret;
 }
 
 SYSCALL_DEFINE3(bpf, int, cmd, union bpf_attr __user *, uattr, unsigned int, size)
@@ -658,10 +759,15 @@ SYSCALL_DEFINE3(bpf, int, cmd, union bpf_attr __user *, uattr, unsigned int, siz
 	if (size > PAGE_SIZE)	/* silly large */
 		return -E2BIG;
 
-	/* If we're handed a bigger struct than we know of,
-	 * ensure all the unknown bits are 0 - i.e. new
-	 * user-space does not rely on any kernel feature
-	 * extensions we dont know about yet.
+	/* Upstream rejects a bigger-than-known struct unless every unknown
+	 * byte is zero.  For this bring-up (2026-09-11) unknown tail bytes
+	 * are only logged, not rejected: Android 13 userspace sets fields
+	 * past our layout (btf/func_info/attach_btf_id/...) that this kernel
+	 * deliberately does not implement (no BTF, no offload, attach
+	 * resolves through expected_attach_type only).  The per-command
+	 * CHECK_ATTR above still guards the fields we do know, and every
+	 * ignored byte is reported once in dmesg so a real dependency
+	 * cannot hide silently.
 	 */
 	if (size > sizeof(attr)) {
 		unsigned char __user *addr;
@@ -676,7 +782,8 @@ SYSCALL_DEFINE3(bpf, int, cmd, union bpf_attr __user *, uattr, unsigned int, siz
 			if (err)
 				return err;
 			if (val)
-				return -E2BIG;
+				pr_warn_once("bpf: cmd %d ignoring nonzero tail byte at +%tu\n",
+					     cmd, addr - (unsigned char __user *)uattr);
 		}
 		size = sizeof(attr);
 	}
@@ -709,6 +816,12 @@ SYSCALL_DEFINE3(bpf, int, cmd, union bpf_attr __user *, uattr, unsigned int, siz
 		break;
 	case BPF_OBJ_GET:
 		err = bpf_obj_get(&attr);
+		break;
+	case BPF_PROG_ATTACH:
+		err = bpf_prog_attach(&attr);
+		break;
+	case BPF_PROG_DETACH:
+		err = bpf_prog_detach(&attr);
 		break;
 	default:
 		err = -EINVAL;

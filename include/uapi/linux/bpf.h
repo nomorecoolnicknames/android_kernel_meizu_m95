@@ -161,6 +161,11 @@ enum bpf_map_type {
 	BPF_MAP_TYPE_PERCPU_CGROUP_STORAGE,
 	BPF_MAP_TYPE_QUEUE,
 	BPF_MAP_TYPE_STACK,
+	BPF_MAP_TYPE_SK_STORAGE,	/* 24, ABI placeholder: not implemented */
+	BPF_MAP_TYPE_DEVMAP_HASH,	/* 25, tethering offload.o declares one;
+					 * XDP/devmap data path does not exist
+					 * on 3.18, so this is a HASH alias stub
+					 * (backport 2026-09-11) */
 };
 
 /* Same ABI rule as above: TRACEPOINT(5) is what the /system/etc/bpf programs
@@ -216,6 +221,16 @@ enum bpf_attach_type {
 #define BPF_ANY		0 /* create new element or update existing */
 #define BPF_NOEXIST	1 /* create new element if it didn't exist */
 #define BPF_EXIST	2 /* update existing element */
+
+/* flags for BPF_PROG_ATTACH command (subset of upstream; the run path that
+ * would need ALLOW_MULTI lists does not exist on this kernel) */
+#define BPF_F_ALLOW_OVERRIDE	(1U << 0)
+#define BPF_F_ALLOW_MULTI	(1U << 1)
+/* file_flags for BPF_OBJ_GET (and map creation): without these every get
+ * demands MAY_WRITE, which breaks non-root readers of 0440 pinned objects
+ * (e.g. gpuservice opening root:graphics programs).  Values match upstream. */
+#define BPF_F_RDONLY		(1U << 3)
+#define BPF_F_WRONLY		(1U << 4)
 
 union bpf_attr {
 	struct { /* anonymous struct used by BPF_MAP_CREATE command */
@@ -277,8 +292,104 @@ union bpf_attr {
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
  * function eBPF program intends to call
  */
+/* Helper ids are ABI: the numbers below are what Android 13 userspace compiles
+ * into BPF_CALL immediates (bpfloader/netd objects in /system/etc/bpf and the
+ * tethering apex use ids 1,2,3,5,6,8,9,10,11,14,15,23,26,31,39,40,43,46,47
+ * and 125).  The 3.18 tree shipped only BPF_FUNC_unspec, so every helper call
+ * failed verification. (backport 2026-09-10, extended 2026-09-11) */
 enum bpf_func_id {
 	BPF_FUNC_unspec,
+	BPF_FUNC_map_lookup_elem,
+	BPF_FUNC_map_update_elem,
+	BPF_FUNC_map_delete_elem,
+	BPF_FUNC_probe_read,
+	BPF_FUNC_ktime_get_ns,
+	BPF_FUNC_trace_printk,
+	BPF_FUNC_get_prandom_u32,
+	BPF_FUNC_get_smp_processor_id,
+	BPF_FUNC_skb_store_bytes,
+	BPF_FUNC_l3_csum_replace,
+	BPF_FUNC_l4_csum_replace,
+	BPF_FUNC_tail_call,
+	BPF_FUNC_clone_redirect,
+	BPF_FUNC_get_current_pid_tgid,
+	BPF_FUNC_get_current_uid_gid,
+	BPF_FUNC_get_current_comm,
+	BPF_FUNC_get_cgroup_classid,
+	BPF_FUNC_skb_vlan_push,
+	BPF_FUNC_skb_vlan_pop,
+	BPF_FUNC_skb_get_tunnel_key,
+	BPF_FUNC_skb_set_tunnel_key,
+	BPF_FUNC_perf_event_read,
+	BPF_FUNC_redirect,
+	BPF_FUNC_get_route_realm,
+	BPF_FUNC_perf_event_output,
+	BPF_FUNC_skb_load_bytes,
+	BPF_FUNC_get_stackid,
+	BPF_FUNC_csum_diff,
+	BPF_FUNC_skb_get_tunnel_opt,
+	BPF_FUNC_skb_set_tunnel_opt,
+	BPF_FUNC_skb_change_proto,
+	BPF_FUNC_skb_change_type,
+	BPF_FUNC_skb_under_cgroup,
+	BPF_FUNC_get_hash_recalc,
+	BPF_FUNC_get_current_task,
+	BPF_FUNC_probe_write_user,
+	BPF_FUNC_current_task_under_cgroup,
+	BPF_FUNC_skb_change_tail,
+	BPF_FUNC_skb_pull_data,
+	BPF_FUNC_csum_update,
+	BPF_FUNC_set_hash_invalid,
+	BPF_FUNC_get_numa_node_id,
+	BPF_FUNC_skb_change_head,
+	BPF_FUNC_xdp_adjust_head,
+	BPF_FUNC_probe_read_str,
+	BPF_FUNC_get_socket_cookie,
+	BPF_FUNC_get_socket_uid,
+	BPF_FUNC_set_hash,
+	BPF_FUNC_setsockopt,
+	BPF_FUNC_skb_adjust_room,
+	BPF_FUNC_redirect_map,
+	BPF_FUNC_sk_redirect_map,
+	BPF_FUNC_sock_map_update,
+	BPF_FUNC_xdp_adjust_meta,
+	BPF_FUNC_perf_event_read_value,
+	BPF_FUNC_perf_prog_read_value,
+	BPF_FUNC_getsockopt,
+	BPF_FUNC_override_return,
+	BPF_FUNC_sock_ops_cb_flags_set,
+	BPF_FUNC_msg_redirect_map,
+	BPF_FUNC_msg_apply_bytes,
+	BPF_FUNC_msg_cork_bytes,
+	BPF_FUNC_msg_pull_data,
+	BPF_FUNC_bind,
+	BPF_FUNC_xdp_adjust_tail,
+	BPF_FUNC_skb_get_xfrm_state,
+	BPF_FUNC_get_stack,
+	BPF_FUNC_skb_load_bytes_relative,
+	BPF_FUNC_fib_lookup,
+	BPF_FUNC_sock_hash_update,
+	BPF_FUNC_msg_redirect_hash,
+	BPF_FUNC_sk_redirect_hash,
+	BPF_FUNC_lwt_push_encap,
+	BPF_FUNC_lwt_seg6_store_bytes,
+	BPF_FUNC_lwt_seg6_adjust_srh,
+	BPF_FUNC_lwt_seg6_action,
+	BPF_FUNC_rc_repeat,
+	BPF_FUNC_rc_keydown,
+	BPF_FUNC_skb_cgroup_id,
+	BPF_FUNC_get_current_cgroup_id,
+	BPF_FUNC_get_local_storage,
+	BPF_FUNC_sk_select_reuseport,
+	BPF_FUNC_skb_ancestor_cgroup_id,
+	BPF_FUNC_sk_lookup_tcp,
+	BPF_FUNC_sk_lookup_udp,
+	BPF_FUNC_sk_release,
+	BPF_FUNC_map_push_elem,
+	BPF_FUNC_map_pop_elem,
+	BPF_FUNC_map_peek_elem,
+	BPF_FUNC_ktime_get_boot_ns = 125,	/* tethering offload.o calls it;
+						 * upstream __BPF_FUNC_MAPPER id */
 	__BPF_FUNC_MAX_ID,
 };
 

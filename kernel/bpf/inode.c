@@ -221,6 +221,10 @@ static const struct inode_operations bpf_dir_iops = {
 	.mkdir		= bpf_mkdir,
 	.rmdir		= simple_rmdir,
 	.unlink		= simple_unlink,
+	/* bpfloader pins every map under a tmp_ name and rename()s it into
+	 * place (netd.o: netd_readonly/ -> netd_shared/); without this VFS
+	 * answers -EPERM and the whole directory load aborts (2026-09-11). */
+	.rename		= simple_rename,
 };
 
 static int bpf_obj_do_pin(const char *pathname, void *raw, enum bpf_type type)
@@ -286,7 +290,8 @@ out:
 	return ret;
 }
 
-static void *bpf_obj_do_get(const char *pathname, enum bpf_type *type)
+static void *bpf_obj_do_get(const char *pathname, enum bpf_type *type,
+			    int flags)
 {
 	struct inode *inode;
 	struct path path;
@@ -298,7 +303,10 @@ static void *bpf_obj_do_get(const char *pathname, enum bpf_type *type)
 		return ERR_PTR(ret);
 
 	inode = path.dentry->d_inode;
-	ret = inode_permission(inode, MAY_WRITE);
+	/* 4.9 checks ACC_MODE(flags), not blanket MAY_WRITE: pinned objects
+	 * are typically 0440, and readers (e.g. gpuservice on root:graphics
+	 * programs) only have MAY_READ. */
+	ret = inode_permission(inode, ACC_MODE(flags));
 	if (ret)
 		goto out;
 
@@ -317,18 +325,23 @@ out:
 	return ERR_PTR(ret);
 }
 
-int bpf_obj_get_user(const char __user *pathname)
+int bpf_obj_get_user(const char __user *pathname, int flags)
 {
 	enum bpf_type type = BPF_TYPE_UNSPEC;
 	struct filename *pname;
+	int f_flags;
 	int ret = -ENOENT;
 	void *raw;
+
+	f_flags = bpf_get_file_flag(flags);
+	if (f_flags < 0)
+		return f_flags;
 
 	pname = getname(pathname);
 	if (IS_ERR(pname))
 		return PTR_ERR(pname);
 
-	raw = bpf_obj_do_get(pname->name, &type);
+	raw = bpf_obj_do_get(pname->name, &type, f_flags);
 	if (IS_ERR(raw)) {
 		ret = PTR_ERR(raw);
 		goto out;

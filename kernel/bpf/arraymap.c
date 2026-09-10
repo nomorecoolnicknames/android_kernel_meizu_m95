@@ -15,6 +15,7 @@
 #include <linux/slab.h>
 #include <linux/mm.h>
 #include <linux/filter.h>
+#include <linux/smp.h>
 
 /* Called from syscall */
 static struct bpf_map *array_map_alloc(union bpf_attr *attr)
@@ -155,6 +156,117 @@ static int __init register_array_map(void)
 	return 0;
 }
 late_initcall(register_array_map);
+
+/* BPF_MAP_TYPE_PERCPU_ARRAY.
+ *
+ * Android 13's bpfloader loads /system/etc/bpf/time_in_state.o, which declares
+ * PERCPU_ARRAY and PERCPU_HASH maps; an object with a map type the kernel does
+ * not know makes bpfloader abort the load of the whole directory
+ * ("=== CRITICAL FAILURE LOADING BPF PROGRAMS FROM ..."), and that is what took
+ * gpuservice and netd down with it (BPF_BACKPORT_3.18.md, sections 1 and 3.2).
+ *
+ * Layout: instead of the per-CPU allocations upstream uses, a per-CPU map is
+ * the ordinary map with map->value_size scaled to
+ * attr->value_size * num_possible_cpus(): the value of one element is the block
+ * of every CPU's value packed by CPU index.  The syscall layer copies
+ * map->value_size bytes for both lookup and update, so userspace keeps exactly
+ * the upstream ABI (BPF_MAP_LOOKUP_ELEM fills value_size * num_possible_cpus()
+ * bytes, BPF_MAP_UPDATE_ELEM consumes the same).  A program must only see the
+ * current CPU's slice of that block, so for these map types
+ * .map_lookup_elem/.map_update_elem are the program-facing slice variants and
+ * the whole-block ones are registered as
+ * .map_lookup_elem_sys_only/.map_update_elem_sys_only.
+ *
+ * Every per-CPU value an Android object uses (time_in_state.o: 256, 128 and 8
+ * bytes) is a multiple of 8, so this packing is byte for byte the layout
+ * upstream produces with its round_up(value_size, 8) stride.
+ *
+ * The slice arithmetic uses raw_smp_processor_id(): these hooks only ever run
+ * from eBPF program context (under rcu_read_lock), which is preemptible in this
+ * kernel (CONFIG_PREEMPT_RCU + CONFIG_DEBUG_PREEMPT=y), and plain
+ * smp_processor_id() would print "BUG: using smp_processor_id() in preemptible
+ * code" plus a stack dump on every map access.  kernel/bpf/helpers.c uses the
+ * raw variant for bpf_get_smp_processor_id() for the same reason.
+ */
+static struct bpf_map *percpu_array_map_alloc(union bpf_attr *attr)
+{
+	union bpf_attr scaled = *attr;
+	u64 value_size;
+
+	value_size = (u64) attr->value_size * num_possible_cpus();
+	if (value_size > U32_MAX)
+		return ERR_PTR(-E2BIG);
+
+	scaled.value_size = (u32) value_size;
+
+	/* array_map_alloc() validates the scaled value_size (zero size, the
+	 * "too big for userspace to read back" limit, overflow of the element
+	 * size) and allocates the elements */
+	return array_map_alloc(&scaled);
+}
+
+/* Called from eBPF program: the value of the current CPU only */
+static void *percpu_array_map_lookup_elem(struct bpf_map *map, void *key)
+{
+	void *value = array_map_lookup_elem(map, key);
+
+	if (!value)
+		return NULL;
+
+	return value + raw_smp_processor_id() * bpf_map_prog_value_size(map);
+}
+
+/* Called from eBPF program: touches the current CPU's slice only, like the
+ * this_cpu_ptr() store upstream does for per-CPU arrays.  The syscall path
+ * writes the whole block through array_map_update_elem(). */
+static int percpu_array_map_update_elem(struct bpf_map *map, void *key,
+					void *value, u64 map_flags)
+{
+	struct bpf_array *array = container_of(map, struct bpf_array, map);
+	u32 index, value_size;
+
+	index = *(u32 *)key;
+	value_size = bpf_map_prog_value_size(map);
+
+	if (map_flags > BPF_EXIST)
+		/* unknown flags */
+		return -EINVAL;
+
+	if (index >= array->map.max_entries)
+		/* all elements were pre-allocated, cannot insert a new one */
+		return -E2BIG;
+
+	if (map_flags == BPF_NOEXIST)
+		/* all elements already exist */
+		return -EEXIST;
+
+	memcpy(array->value + array->elem_size * index +
+	       raw_smp_processor_id() * value_size, value, value_size);
+	return 0;
+}
+
+static const struct bpf_map_ops percpu_array_ops = {
+	.map_alloc = percpu_array_map_alloc,
+	.map_free = array_map_free,
+	.map_get_next_key = array_map_get_next_key,
+	.map_lookup_elem = percpu_array_map_lookup_elem,
+	.map_lookup_elem_sys_only = array_map_lookup_elem,
+	.map_update_elem = percpu_array_map_update_elem,
+	.map_update_elem_sys_only = array_map_update_elem,
+	.map_delete_elem = array_map_delete_elem,
+};
+
+static struct bpf_map_type_list percpu_array_type __read_mostly = {
+	.ops = &percpu_array_ops,
+	.type = BPF_MAP_TYPE_PERCPU_ARRAY,
+};
+
+static int __init register_percpu_array_map(void)
+{
+	bpf_register_map_type(&percpu_array_type);
+	return 0;
+}
+late_initcall(register_percpu_array_map);
 
 static struct bpf_map *fd_array_map_alloc(union bpf_attr *attr)
 {

@@ -13,6 +13,7 @@
 #include <linux/jhash.h>
 #include <linux/filter.h>
 #include <linux/vmalloc.h>
+#include <linux/smp.h>
 
 struct bpf_htab {
 	struct bpf_map map;
@@ -385,3 +386,186 @@ static int __init register_htab_map(void)
 	return 0;
 }
 late_initcall(register_htab_map);
+
+/* BPF_MAP_TYPE_PERCPU_HASH - time_in_state.o declares two of these, see the
+ * comment above percpu_array_map_alloc() in arraymap.c for why the per-CPU
+ * types are needed and for the value layout: the value of an element is one
+ * block of num_possible_cpus() per-CPU values and map->value_size is that whole
+ * block, which is what the syscall layer copies. */
+static struct bpf_map *htab_percpu_map_alloc(union bpf_attr *attr)
+{
+	union bpf_attr scaled = *attr;
+	u64 value_size;
+
+	value_size = (u64) attr->value_size * num_possible_cpus();
+	if (value_size > U32_MAX)
+		return ERR_PTR(-E2BIG);
+
+	scaled.value_size = (u32) value_size;
+
+	/* htab_map_alloc() validates the scaled value_size (key_size, empty
+	 * map, and that the resulting element stays kmalloc-able) and allocates
+	 * the buckets and elements */
+	return htab_map_alloc(&scaled);
+}
+
+/* Called from eBPF program: the value of the current CPU only */
+static void *htab_percpu_map_lookup_elem(struct bpf_map *map, void *key)
+{
+	void *value = htab_map_lookup_elem(map, key);
+
+	if (!value)
+		return NULL;
+
+	return value + raw_smp_processor_id() * bpf_map_prog_value_size(map);
+}
+
+/* Called from eBPF program: a program passes one CPU's worth of value
+ * (upstream's pcpu_copy_value() with onallcpus == false) and it lands in the
+ * current CPU's slice only.  An existing element is updated in place so that
+ * the other CPUs' slices keep their data, as upstream does; a new element is
+ * created with the other slices zeroed - upstream gets those zeroes from the
+ * per-CPU allocator, while an element here comes from kmalloc().  The whole
+ * block is written by the syscall path through htab_map_update_elem(). */
+static int htab_percpu_map_update_elem(struct bpf_map *map, void *key,
+				       void *value, u64 map_flags)
+{
+	struct bpf_htab *htab = container_of(map, struct bpf_htab, map);
+	struct hlist_head *head;
+	struct htab_elem *l_new, *l_old;
+	unsigned long flags;
+	u32 value_size, value_off, hash, key_size;
+	int ret;
+
+	if (map_flags > BPF_EXIST)
+		/* unknown flags */
+		return -EINVAL;
+
+	WARN_ON_ONCE(!rcu_read_lock_held());
+
+	key_size = map->key_size;
+	value_size = bpf_map_prog_value_size(map);
+	value_off = raw_smp_processor_id() * value_size;
+
+	hash = htab_map_hash(key, key_size);
+
+	/* allocate new element outside of lock */
+	l_new = kmalloc(htab->elem_size, GFP_ATOMIC | __GFP_NOWARN);
+	if (!l_new)
+		return -ENOMEM;
+
+	memcpy(l_new->key, key, key_size);
+	memset(l_new->key + round_up(key_size, 8), 0, map->value_size);
+	memcpy(l_new->key + round_up(key_size, 8) + value_off, value, value_size);
+	l_new->hash = hash;
+
+	/* bpf_map_update_elem() can be called in_irq() */
+	raw_spin_lock_irqsave(&htab->lock, flags);
+
+	head = select_bucket(htab, hash);
+
+	l_old = lookup_elem_raw(head, hash, key, key_size);
+
+	if (l_old) {
+		if (map_flags == BPF_NOEXIST) {
+			/* elem already exists */
+			ret = -EEXIST;
+			goto free_new;
+		}
+		/* per-CPU hash map can update the value in place */
+		memcpy(l_old->key + round_up(key_size, 8) + value_off,
+		       value, value_size);
+		ret = 0;
+		goto free_new;
+	}
+
+	if (map_flags == BPF_EXIST) {
+		/* elem doesn't exist, cannot update it */
+		ret = -ENOENT;
+		goto free_new;
+	}
+
+	if (unlikely(htab->count >= map->max_entries)) {
+		/* if elem with this 'key' doesn't exist and we've reached
+		 * max_entries limit, fail insertion of new elem
+		 */
+		ret = -E2BIG;
+		goto free_new;
+	}
+
+	/* add new element to the head of the list, so that concurrent
+	 * search will find it before old elem
+	 */
+	hlist_add_head_rcu(&l_new->hash_node, head);
+	htab->count++;
+	raw_spin_unlock_irqrestore(&htab->lock, flags);
+
+	return 0;
+
+free_new:
+	raw_spin_unlock_irqrestore(&htab->lock, flags);
+	kfree(l_new);
+	return ret;
+}
+
+static const struct bpf_map_ops htab_percpu_map_ops = {
+	.map_alloc = htab_percpu_map_alloc,
+	.map_free = htab_map_free,
+	.map_get_next_key = htab_map_get_next_key,
+	.map_lookup_elem = htab_percpu_map_lookup_elem,
+	.map_lookup_elem_sys_only = htab_map_lookup_elem,
+	.map_update_elem = htab_percpu_map_update_elem,
+	.map_update_elem_sys_only = htab_map_update_elem,
+	.map_delete_elem = htab_map_delete_elem,
+};
+
+static struct bpf_map_type_list htab_percpu_type __read_mostly = {
+	.ops = &htab_percpu_map_ops,
+	.type = BPF_MAP_TYPE_PERCPU_HASH,
+};
+
+static int __init register_htab_percpu_map(void)
+{
+	bpf_register_map_type(&htab_percpu_type);
+	return 0;
+}
+late_initcall(register_htab_percpu_map);
+
+/* BPF_MAP_TYPE_DEVMAP_HASH - tethering offload.o declares one.  The XDP data
+ * path and the devmap redirect machinery do not exist on 3.18, so this is a
+ * bring-up stub (2026-09-11): a thin alias over the ordinary HASH map.  The
+ * file-static htab helpers are reused verbatim for alloc/lookup/update/
+ * delete/get_next_key/free; only the reported map_type differs.  Programs
+ * using the map verify and load but are never executed on this kernel. */
+static struct bpf_map *devmap_hash_map_alloc(union bpf_attr *attr)
+{
+	struct bpf_map *map;
+
+	map = htab_map_alloc(attr);
+	if (IS_ERR(map))
+		return map;
+
+	map->map_type = BPF_MAP_TYPE_DEVMAP_HASH;
+	return map;
+}
+
+static const struct bpf_map_ops devmap_hash_ops = {
+	.map_alloc = devmap_hash_map_alloc,
+	.map_free = htab_map_free,
+	.map_get_next_key = htab_map_get_next_key,
+	.map_lookup_elem = htab_map_lookup_elem,
+	.map_update_elem = htab_map_update_elem,
+	.map_delete_elem = htab_map_delete_elem,
+};
+
+static struct bpf_map_type_list devmap_hash_type __read_mostly = {
+	.ops = &devmap_hash_ops,
+	.type = BPF_MAP_TYPE_DEVMAP_HASH,
+};
+
+static int __init register_devmap_hash_map(void)
+{
+	bpf_register_map_type(&devmap_hash_type);
+	return 0;
+}
+late_initcall(register_devmap_hash_map);

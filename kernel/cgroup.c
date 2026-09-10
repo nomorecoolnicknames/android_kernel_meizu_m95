@@ -863,6 +863,9 @@ static void cgroup_destroy_root(struct cgroup_root *root)
 	BUG_ON(atomic_read(&root->nr_cgrps));
 	BUG_ON(!list_empty(&cgrp->self.children));
 
+	/* eBPF bring-up stub: drop BPF_PROG_ATTACH refs on the root cgroup. */
+	cgroup_bpf_stub_release(cgrp);
+
 	/* Rebind all subsystems back to the default hierarchy */
 	rebind_subsystems(&cgrp_dfl_root, root->subsys_mask);
 
@@ -4389,6 +4392,8 @@ static void css_free_work_fn(struct work_struct *work)
 			 */
 			cgroup_put(cgroup_parent(cgrp));
 			kernfs_put(cgrp->kn);
+			/* eBPF bring-up stub: drop BPF_PROG_ATTACH refs. */
+			cgroup_bpf_stub_release(cgrp);
 			kfree(cgrp);
 		} else {
 			/*
