@@ -898,9 +898,8 @@ disp_lcm_handle *disp_lcm_probe(char *plcm_name, LCM_INTERFACE_ID lcm_id, int is
 	disp_lcm_handle *plcm = NULL;
 
 	DISPFUNC();
-	pr_info("M95DBG disp_lcm_probe: plcm_name=%s is_lcm_inited=%d _lcm_count=%d\n",
-		plcm_name ? plcm_name : "NULL", is_lcm_inited, _lcm_count());
-	DISPCHECK("plcm_name=%s is_lcm_inited %d\n", plcm_name, is_lcm_inited);
+	DISPCHECK("plcm_name=%s is_lcm_inited %d lcm_count=%d\n", plcm_name,
+		  is_lcm_inited, _lcm_count());
 
 #if defined(MTK_LCM_DEVICE_TREE_SUPPORT)
 	if (check_lcm_node_from_DT() == 0) {
@@ -988,9 +987,9 @@ disp_lcm_handle *disp_lcm_probe(char *plcm_name, LCM_INTERFACE_ID lcm_id, int is
 		return NULL;
 	}
 
-	pr_info("M95DBG disp_lcm_probe: FOUND lcm_drv=%s isLCMInited=%d lcmindex=%d\n",
-		lcm_drv ? (lcm_drv->name ? lcm_drv->name : "?") : "NULL",
-		isLCMInited, lcmindex);
+	DISPCHECK("lcm_drv=%s isLCMInited=%d lcmindex=%d\n",
+		  lcm_drv ? (lcm_drv->name ? lcm_drv->name : "?") : "NULL",
+		  isLCMInited, lcmindex);
 
 	plcm = kzalloc(sizeof(uint8_t *) * sizeof(disp_lcm_handle), GFP_KERNEL);
 	lcm_param = kzalloc(sizeof(uint8_t *) * sizeof(LCM_PARAMS), GFP_KERNEL);
@@ -1048,21 +1047,17 @@ int disp_lcm_init(disp_lcm_handle *plcm, int force)
 	LCM_DRIVER *lcm_drv = NULL;
 
 	DISPFUNC();
-	pr_info("M95DBG disp_lcm_init: plcm=%p force=%d inited=%d\n",
-		plcm, force, _is_lcm_inited(plcm));
 	if (_is_lcm_inited(plcm)) {
 		lcm_drv = plcm->drv;
 
 		if (lcm_drv->init_power) {
 			if (!disp_lcm_is_inited(plcm) || force) {
-				pr_info("M95DBG disp_lcm_init: calling init_power()\n");
 				lcm_drv->init_power();
 			}
 		}
 
 		if (lcm_drv->init) {
 			if (!disp_lcm_is_inited(plcm) || force) {
-				pr_info("M95DBG disp_lcm_init: calling init()\n");
 				lcm_drv->init();
 			}
 		} else {

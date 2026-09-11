@@ -526,7 +526,7 @@ static int kwdt_thread(void *arg)
 
 						if (all_in || overdue) {
 							if (!all_in)
-								printk_deferred("[WDK]: safety kick, CPUs not marked in: 0x%x (expect 0x%x got 0x%x, %lu ms since last kick)\n",
+								printk_deferred("[WDK]: safety kick, CPUs not marked in: 0x%x (expect 0x%x got 0x%x, %u ms since last kick)\n",
 										expect & ~local_bit, expect, local_bit,
 										jiffies_to_msecs(since));
 							printk_deferred("[WDK]: kick Ex WDT,RT[%lld]\n",

@@ -537,8 +537,45 @@ typedef enum {
 	ISP_CMD_ION_IMPORT, /* get ion handle */
 	ISP_CMD_ION_FREE,  /* free ion handle */
 	ISP_CMD_CQ_SW_PATCH,  /* sim cq update behavior as atomic behavior */
-	ISP_CMD_ION_FREE_BY_HWMODULE  /* free all ion handle */
+	ISP_CMD_ION_FREE_BY_HWMODULE,  /* free all ion handle */
+	/*
+	 * 36..38 exist in the MTK trees this BSP was cut from but not here, and
+	 * libcamdrv_isp.so calls 38 (IspDrvDipPhy::setMemInfo) once per stream
+	 * configuration. Without them the ioctl fell through to default and the
+	 * blob logged "ispDrvDip init ERROR: set cmdq mem info fail" every time.
+	 * 36 and 37 are declared only to keep 38 at the number the blob sends;
+	 * they are deliberately not implemented and still land in default.
+	 */
+	ISP_CMD_DUMP_BUFFER,          /* 36, not implemented here */
+	ISP_CMD_GET_DUMP_INFO,        /* 37, not implemented here */
+	ISP_CMD_SET_MEM_INFO          /* 38, tpipe / cmdq dump-address registration */
 } ISP_CMD_ENUM;
+
+/*
+ * Which of the two dump-address registrations this call carries. The blob sends
+ * 1 and 2; the mapping of 2 to the CQ side is read off its own error string,
+ * "set cmdq mem info fail, cmd:0x2", and is therefore inferred rather than
+ * documented. Nothing downstream depends on getting the pair the right way
+ * round except the labelling of a future error dump.
+ */
+#define ISP_MEMORY_INFO_TPIPE_CMD	1
+#define ISP_MEMORY_INFO_CMDQ_CMD	2
+
+typedef struct {
+	unsigned int MemInfoCmd;
+	unsigned int MemPa;
+	unsigned int *MemVa;
+	unsigned int MemSizeDiff;
+} ISP_MEM_INFO_STRUCT;
+
+#ifdef CONFIG_COMPAT
+typedef struct {
+	compat_uint_t MemInfoCmd;
+	compat_uint_t MemPa;
+	compat_uptr_t MemVa;
+	compat_uint_t MemSizeDiff;
+} compat_ISP_MEM_INFO_STRUCT;
+#endif
 
 typedef enum {
 	ISP_HALT_DMA_IMGO = 0,
@@ -601,6 +638,15 @@ typedef enum {
 #define ISP_ION_FREE                _IOW(ISP_MAGIC, ISP_CMD_ION_FREE,   ISP_DEV_ION_NODE_STRUCT)
 #define ISP_ION_FREE_BY_HWMODULE    _IOW(ISP_MAGIC, ISP_CMD_ION_FREE_BY_HWMODULE, unsigned int)
 #define ISP_CQ_SW_PATCH             _IOW(ISP_MAGIC, ISP_CMD_CQ_SW_PATCH, unsigned int)
+/*
+ * Native encoding is 24 bytes here because MemVa is a real pointer on arm64.
+ * The only caller is the camera provider, which is compile_multilib "32", so
+ * the request that actually arrives is the compat one below at 16 bytes --
+ * 0xC0106B26, exactly what libcamdrv_isp.so sends. Defining only the native
+ * form would produce a command the blob can never match, and the symptom would
+ * be indistinguishable from doing nothing at all.
+ */
+#define ISP_SET_MEM_INFO            _IOWR(ISP_MAGIC, ISP_CMD_SET_MEM_INFO, ISP_MEM_INFO_STRUCT)
 
 #ifdef CONFIG_COMPAT
 #define COMPAT_ISP_READ_REGISTER    _IOWR(ISP_MAGIC, ISP_CMD_READ_REG,      compat_ISP_REG_IO_STRUCT)
@@ -621,6 +667,7 @@ typedef enum {
 #define COMPAT_ISP_RESET_BY_HWMODULE _IOW(ISP_MAGIC, ISP_CMD_RESET_BY_HWMODULE, compat_uptr_t)
 #define COMPAT_ISP_VF_LOG           _IOW(ISP_MAGIC, ISP_CMD_VF_LOG,         compat_uptr_t)
 #define COMPAT_ISP_CQ_SW_PATCH      _IOW(ISP_MAGIC, ISP_CMD_CQ_SW_PATCH,         compat_uptr_t)
+#define COMPAT_ISP_SET_MEM_INFO     _IOWR(ISP_MAGIC, ISP_CMD_SET_MEM_INFO, compat_ISP_MEM_INFO_STRUCT)
 #endif
 
 int32_t ISP_MDPClockOnCallback(uint64_t engineFlag);

@@ -8,6 +8,7 @@
 #include <linux/delay.h>
 #include <linux/uaccess.h>
 #include <linux/fs.h>
+#include <linux/module.h>
 
 #include "lens_info.h"
 
@@ -195,6 +196,86 @@ static inline int setAFMacro(unsigned long a_u4Position)
 	return 0;
 }
 
+/*
+ * AFIOC_S_SETPARA, sent by libcam.hal3a.v3.so as mcuIOC_T_SETPARA during an
+ * active AF scan. Without a case for it the switch below fell through to
+ * default and answered -EPERM, which the 3A blob reported as
+ * "[setMCUMacroPos] ioctl - mcuIOC_T_SETPARA, error Operation not permitted"
+ * and which left AF stuck in ACTIVE_UNFOCUSED, so no capture ever completed.
+ * Modelled on BU63165AF.c:187 - accept the command, log what was asked for, and
+ * succeed. The only CmdID that driver acts on is 1 (OIS mode); AK7371 has no
+ * OIS, so there is nothing to do here beyond reporting it. The log is
+ * deliberate: it is the first look we get at the CmdID the blob actually sends.
+ */
+static inline int setAFPara(__user stAF_MotorCmd * pstMotorCmd)
+{
+	stAF_MotorCmd stMotorCmd;
+
+	if (copy_from_user(&stMotorCmd, pstMotorCmd, sizeof(stMotorCmd)))
+		LOG_INF("copy from user failed when getting motor command\n");
+
+	LOG_INF("Motor CmdID : %x, Param : %x\n", stMotorCmd.u4CmdID, stMotorCmd.u4Param);
+
+	return 0;
+}
+
+/*
+ * Bring-up instrument, not part of normal operation.
+ *
+ * The 3A blob computes focus targets every frame but never issues
+ * AFIOC_T_MOVETO, so nothing has ever established whether this actuator can
+ * move at all. This knob drives moveAF() directly and reports the result, which
+ * splits "the blob never asks" from "the motor cannot move":
+ *
+ *   echo 600 > /sys/module/AK7371AF/parameters/dbg_move
+ *   cat      /sys/module/AK7371AF/parameters/dbg_move
+ *   dmesg | grep dbg_move
+ *
+ * It needs the I2C client, which AK7371AF_SetI2Cclient only installs once the
+ * camera HAL has opened /dev/MAINAF and selected this motor, so open the camera
+ * first; without it the pointers are NULL and this would oops rather than
+ * report. Hence the guard.
+ */
+static int af_dbg_move_set(const char *val, const struct kernel_param *kp)
+{
+	unsigned long pos;
+	int ret;
+
+	if (!g_pstAF_I2Cclient || !g_pAF_SpinLock || !g_pAF_Opened) {
+		pr_info(AF_DRVNAME " [dbg_move] not bound yet - start the camera first\n");
+		return -ENODEV;
+	}
+
+	ret = kstrtoul(val, 0, &pos);
+	if (ret)
+		return ret;
+
+	pr_info(AF_DRVNAME " [dbg_move] request %lu (curr %lu inf %lu macro %lu opened %d)\n",
+		pos, g_u4CurrPosition, g_u4AF_INF, g_u4AF_MACRO, *g_pAF_Opened);
+
+	ret = moveAF(pos);
+
+	pr_info(AF_DRVNAME " [dbg_move] moveAF returned %d, curr now %lu\n",
+		ret, g_u4CurrPosition);
+
+	return ret;
+}
+
+static int af_dbg_move_get(char *buf, const struct kernel_param *kp)
+{
+	return scnprintf(buf, PAGE_SIZE,
+			 "curr %lu target %lu inf %lu macro %lu opened %d\n",
+			 g_u4CurrPosition, g_u4TargetPosition,
+			 g_u4AF_INF, g_u4AF_MACRO,
+			 g_pAF_Opened ? *g_pAF_Opened : -1);
+}
+
+static struct kernel_param_ops af_dbg_move_ops = {
+	.set = af_dbg_move_set,
+	.get = af_dbg_move_get,
+};
+module_param_cb(dbg_move, &af_dbg_move_ops, NULL, 0644);
+
 /* ////////////////////////////////////////////////////////////// */
 long AK7371AF_Ioctl(struct file *a_pstFile, unsigned int a_u4Command, unsigned long a_u4Param)
 {
@@ -215,6 +296,10 @@ long AK7371AF_Ioctl(struct file *a_pstFile, unsigned int a_u4Command, unsigned l
 
 	case AFIOC_T_SETMACROPOS:
 		i4RetValue = setAFMacro(a_u4Param);
+		break;
+
+	case AFIOC_S_SETPARA:
+		i4RetValue = setAFPara((__user stAF_MotorCmd *) (a_u4Param));
 		break;
 
 	default:

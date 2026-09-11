@@ -6443,6 +6443,15 @@ _RST_EXIT:
 }
 
 
+/*
+ * Dump-address registrations from ISP_SET_MEM_INFO. Written only by that ioctl,
+ * read only by the DIP error dump path. Zeroed here rather than left as BSS
+ * garbage so a dump taken before any registration prints obvious zeros instead
+ * of a plausible-looking address.
+ */
+static ISP_MEM_INFO_STRUCT g_TpipeBaseAddrInfo = {0, 0, NULL, 0};
+static ISP_MEM_INFO_STRUCT g_CmdqBaseAddrInfo = {0, 0, NULL, 0};
+
 /*******************************************************************************
 *
 ********************************************************************************/
@@ -7303,6 +7312,37 @@ static long ISP_ioctl(struct file *pFile, unsigned int Cmd, unsigned long Param)
 			Ret = -EFAULT;
 		}
 		break;
+	case ISP_SET_MEM_INFO: {
+			ISP_MEM_INFO_STRUCT MemInfo;
+
+			if (copy_from_user(&MemInfo, (void *)Param, sizeof(ISP_MEM_INFO_STRUCT)) != 0) {
+				LOG_ERR("[set mem info]copy_from_user failed\n");
+				Ret = -EFAULT;
+				break;
+			}
+
+			/*
+			 * Registration only. Both destinations are read exclusively by the
+			 * DIP error dump, to translate a physical address back to a virtual
+			 * one when printing; nothing in the pixel path consumes them. So
+			 * storing the value is the whole job, and it is strictly better
+			 * than returning success without storing, which would leave a
+			 * future dump unable to print the tile or CQ contents.
+			 */
+			switch (MemInfo.MemInfoCmd) {
+			case ISP_MEMORY_INFO_TPIPE_CMD:
+				g_TpipeBaseAddrInfo = MemInfo;
+				break;
+			case ISP_MEMORY_INFO_CMDQ_CMD:
+				g_CmdqBaseAddrInfo = MemInfo;
+				break;
+			default:
+				LOG_INF("unknown mem info cmd:0x%x pa:0x%x diff:0x%x\n",
+					MemInfo.MemInfoCmd, MemInfo.MemPa, MemInfo.MemSizeDiff);
+				break;
+			}
+			break;
+		}
 	case ISP_CQ_SW_PATCH: {
 			static MUINT32 Addr[2] = {0, 0};
 			if (copy_from_user(DebugFlag, (void *)Param, sizeof(MUINT32)*2) == 0) {
@@ -7509,6 +7549,25 @@ static int compat_put_isp_register_userkey_struct_data(
 }
 #endif
 
+static int compat_get_isp_mem_info_data(
+	compat_ISP_MEM_INFO_STRUCT __user *data32,
+	ISP_MEM_INFO_STRUCT __user *data)
+{
+	compat_uint_t u;
+	compat_uptr_t uptr;
+	int err = 0;
+
+	err = get_user(u, &data32->MemInfoCmd);
+	err |= put_user(u, &data->MemInfoCmd);
+	err |= get_user(u, &data32->MemPa);
+	err |= put_user(u, &data->MemPa);
+	err |= get_user(uptr, &data32->MemVa);
+	err |= put_user(compat_ptr(uptr), &data->MemVa);
+	err |= get_user(u, &data32->MemSizeDiff);
+	err |= put_user(u, &data->MemSizeDiff);
+	return err;
+}
+
 static long ISP_ioctl_compat(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	long ret = 0;
@@ -7705,6 +7764,29 @@ static long ISP_ioctl_compat(struct file *filp, unsigned int cmd, unsigned long 
 			filp->f_op->unlocked_ioctl(filp, ISP_GET_START_TIME,
 						   (unsigned long)compat_ptr(arg));
 		return ret;
+	}
+	case COMPAT_ISP_SET_MEM_INFO: {
+		compat_ISP_MEM_INFO_STRUCT __user *data32;
+		ISP_MEM_INFO_STRUCT __user *data;
+		int err = 0;
+
+		data32 = compat_ptr(arg);
+		data = compat_alloc_user_space(sizeof(*data));
+		if (data == NULL) {
+			return -EFAULT;
+		}
+
+		err = compat_get_isp_mem_info_data(data32, data);
+		if (err) {
+			LOG_INF("compat_get_isp_mem_info_data error!!!\n");
+			return err;
+		}
+		/*
+		 * No put-back pass: the native handler only reads. The caller's own
+		 * 32-bit buffer is left untouched, so an _IOWR read-back sees exactly
+		 * what it wrote.
+		 */
+		return filp->f_op->unlocked_ioctl(filp, ISP_SET_MEM_INFO, (unsigned long)data);
 	}
 	case ISP_RESET_CAM_P1:
 	case ISP_WAIT_IRQ:
