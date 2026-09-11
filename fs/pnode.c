@@ -435,5 +435,3 @@ void propagate_remount(struct mount *mnt)
 			sb->s_op->copy_mnt_data(m->mnt.data, mnt->mnt.data);
 	}
 }
-	}
-}
