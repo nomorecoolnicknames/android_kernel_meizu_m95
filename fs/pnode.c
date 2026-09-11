@@ -405,30 +405,35 @@ int propagate_umount(struct hlist_head *list)
 }
 
 /*
- *  Iterates over all slaves, and slaves of slaves.
+ * Remount of a mount with copy_mnt_data (sdcardfs): copy the new per-mount
+ * data to every mount that receives propagation from @mnt's parent, the way
+ * AOSP does since "ANDROID: mnt: Propagate remount correctly".
+ *
+ * m95 2026-09-11: the previous next_descendent() walker from "ANDROID: mnt:
+ * remount should propagate to slaves of slaves" spins forever on a mount
+ * whose mnt_master is NULL (next_slave() of an empty list returns the mount
+ * itself), which is exactly what the A13 sdcard daemon's remount of
+ * /data/media triggers right after boot_completed: soft lockup on the CPU
+ * holding lock_mount_hash() (pstore: PC propagate_remount+0x74 under
+ * watchdog_timer_fn), and before the WDK fix the starved kicker made the
+ * hardware watchdog reset the phone at ~215 s every boot.
+ *
+ * vfsmount lock must be held for write (caller does lock_mount_hash()).
  */
-static struct mount *next_descendent(struct mount *root, struct mount *cur)
-{
-	if (!IS_MNT_NEW(cur) && !list_empty(&cur->mnt_slave_list))
-		return first_slave(cur);
-	do {
-		if (cur->mnt_slave.next != &cur->mnt_master->mnt_slave_list)
-			return next_slave(cur);
-		cur = cur->mnt_master;
-	} while (cur != root);
-	return NULL;
-}
-
 void propagate_remount(struct mount *mnt)
 {
-	struct mount *m = mnt;
+	struct mount *parent = mnt->mnt_parent;
+	struct mount *p = mnt, *m;
 	struct super_block *sb = mnt->mnt.mnt_sb;
 
-	if (sb->s_op->copy_mnt_data) {
-		m = next_descendent(mnt, m);
-		while (m) {
+	if (!sb->s_op->copy_mnt_data)
+		return;
+	for (p = propagation_next(parent, parent); p;
+				p = propagation_next(p, parent)) {
+		m = __lookup_mnt(&p->mnt, mnt->mnt_mountpoint);
+		if (m)
 			sb->s_op->copy_mnt_data(m->mnt.data, mnt->mnt.data);
-			m = next_descendent(mnt, m);
-		}
+	}
+}
 	}
 }
