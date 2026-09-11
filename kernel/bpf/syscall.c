@@ -194,6 +194,12 @@ struct bpf_map *bpf_map_get_with_uref(u32 ufd)
 	if (IS_ERR(map))
 		return map;
 
+	/* The caller (BPF_OBJ_PIN probe) keeps this reference: the pinned
+	 * dentry owns it until evict/unlink puts it back.  Without the inc
+	 * the map is freed when the creator fds close (bpfloader exits) and
+	 * every later access through bpffs is use-after-free — random oopses
+	 * under load (e.g. netd NetworkStats reads).  Matches upstream 4.9. */
+	bpf_map_inc(map, true);
 	fdput(f);
 	return map;
 }
