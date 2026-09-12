@@ -50,7 +50,15 @@
 /*
  * Buffer hash
  */
-#define DM_BUFIO_HASH_BITS	20
+/*
+ * m95 / Android 13 GSI: apexd mounts 16 dm-verity devices, and each bufio
+ * client vmalloc()s a hash table of (1 << HASH_BITS) hlist_heads: 8 MB per
+ * client at 20 bits = 128 MB of vmalloc on a 2.7 GB phone (vmallocinfo
+ * dm_bufio_client_create, FACT 2026-09-12).  Mainline replaced the table with
+ * an rbtree in 3.19 (commit 4e420c452b39); until that is backported, 14 bits
+ * (128 KB per client) is plenty for verity caches of a few MB.
+ */
+#define DM_BUFIO_HASH_BITS	14
 #define DM_BUFIO_HASH(block) \
 	((((block) >> DM_BUFIO_HASH_BITS) ^ (block)) & \
 	 ((1 << DM_BUFIO_HASH_BITS) - 1))
