@@ -1,17 +1,9 @@
-# ReMeizu MX6 / M95 — Android 13 kernel development
+# Meizu MX6 kernel
 
-Linux 3.18.22 with MT6797 board work, Mali r12p1 integration and Android 13 compatibility changes.
+Linux 3.18.22 for Meizu MX6 (M95/M685, MT6797), based on the
+[Meizu M685 source](https://github.com/meizuosc/m685), with Mali Midgard r12p1
+and Android 13 compatibility changes.
 
-Native LineageOS 20 userdebug has booted on MX6; historical device testing
-observed LTE data and IMS registration. Remaining work includes incoming IMS
-call handling, camera lifecycle and full power/suspend acceptance. This is
-active development, not a stable-ROM release.
-
-- [Source provenance, exclusions and build requirements](PUBLICATION.md)
-- [Original-to-public commit history](PUBLICATION.json)
-- [Verified historical runtime and artifact identities](RUNTIME_SUMMARY.json)
-- [ReMeizu project progress](https://github.com/nomorecoolnicknames/remeizu/blob/codex/progress-and-roadmap-20260929/PROJECT_STATUS.md)
-
-This publication performs no new build or hardware test and does not supply
-a complete proprietary-free Android build environment. Existing source licenses
-apply per file; see the publication notes before selecting hosted build inputs.
+Use `arch/arm64/configs/lineage_m95_defconfig` with an AArch64 Android GCC
+toolchain. Building an Android image also requires the matching device tree,
+framework compatibility changes and separately supplied vendor components.
