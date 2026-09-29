@@ -1,27 +1,17 @@
-[M685](http://www.meizu.com)
-=================
+# ReMeizu MX6 / M95 — Android 13 kernel development
 
-M685 repo is Linux kernel source code for Meizu MX6 smartphones. With this repo, you can customize the source code and compile a Linux kernel image yourself. Enjoy it!
+Linux 3.18.22 with MT6797 board work, Mali r12p1 integration and Android 13 compatibility changes.
 
-HOW TO COMPILE
------------
+Native LineageOS 20 userdebug has booted on MX6; historical device testing
+observed LTE data and IMS registration. Remaining work includes incoming IMS
+call handling, camera lifecycle and full power/suspend acceptance. This is
+active development, not a stable-ROM release.
 
-###1. Download source code###
+- [Source provenance, exclusions and build requirements](PUBLICATION.md)
+- [Original-to-public commit history](PUBLICATION.json)
+- [Verified historical runtime and artifact identities](RUNTIME_SUMMARY.json)
+- [ReMeizu project progress](https://github.com/nomorecoolnicknames/remeizu/blob/codex/progress-and-roadmap-20260929/PROJECT_STATUS.md)
 
-  <code>git clone https://github.com/meizuosc/m685.git</code>
-
-###2. Compiling###
-
-```
-make ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- mx6_defconfig
-mkdir out && make -j8 ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- O=`pwd`/out
-```
-
-Note:
-+ Make sure you have arm cross tool chain, maybe you can download [here](http://www.linaro.org/downloads)
-+ If you get a poor cpu in your compiling host, you should use "-j4" or lower instead of "-j8"
-
-Get Help
---------
-
-Checkout our community http://bbs.meizu.cn (in Chinese)
+This publication performs no new build or hardware test and does not supply
+a complete proprietary-free Android build environment. Existing source licenses
+apply per file; see the publication notes before selecting hosted build inputs.
