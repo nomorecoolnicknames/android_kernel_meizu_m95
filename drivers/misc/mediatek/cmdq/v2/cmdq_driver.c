@@ -763,6 +763,45 @@ static long cmdq_ioctl(struct file *pFile, unsigned int code, unsigned long para
 			}
 		} while (0);
 		break;
+	case CMDQ_IOCTL_QUERY_DTS_BLOB:
+		do {
+			/*
+			 * libdpframework expects a 38-subsys layout, see
+			 * cmdq_driver.h. The BUILD_BUG_ONs pin both struct
+			 * sizes so a header change cannot silently change
+			 * the ioctl number.
+			 */
+			cmdqDTSDataStruct *pDtsData;
+			cmdqDTSDataBlobStruct *pBlobData;
+			uint32_t i;
+
+			BUILD_BUG_ON(sizeof(cmdqDTSDataBlobStruct) != 3720);
+			BUILD_BUG_ON(sizeof(cmdqDTSDataStruct) != 3236);
+
+			pBlobData = kzalloc(sizeof(*pBlobData), GFP_KERNEL);
+			if (pBlobData == NULL)
+				return -ENOMEM;
+
+			pDtsData = cmdq_core_get_whole_DTS_Data();
+			memcpy(pBlobData->eventTable, pDtsData->eventTable,
+			       sizeof(pBlobData->eventTable));
+			memcpy(pBlobData->subsys, pDtsData->subsys,
+			       sizeof(pDtsData->subsys));
+			/* Mark the extra slots invalid (-1), as cmdq_core does. */
+			for (i = CMDQ_SUBSYS_MAX_COUNT; i < CMDQ_SUBSYS_COUNT_BLOB; i++)
+				pBlobData->subsys[i].subsysID = -1;
+			memcpy(pBlobData->MDPBaseAddress, pDtsData->MDPBaseAddress,
+			       sizeof(pBlobData->MDPBaseAddress));
+
+			if (copy_to_user((void *)param, pBlobData,
+					 sizeof(cmdqDTSDataBlobStruct))) {
+				CMDQ_ERR("Copy blob device tree information to user space failed\n");
+				kfree(pBlobData);
+				return -EFAULT;
+			}
+			kfree(pBlobData);
+		} while (0);
+		break;
 	case CMDQ_IOCTL_NOTIFY_ENGINE:
 		do {
 			uint64_t engineFlag;
@@ -795,6 +834,7 @@ static long cmdq_ioctl_compat(struct file *pFile, unsigned int code, unsigned lo
 	case CMDQ_IOCTL_READ_ADDRESS_VALUE:
 	case CMDQ_IOCTL_QUERY_CAP_BITS:
 	case CMDQ_IOCTL_QUERY_DTS:
+	case CMDQ_IOCTL_QUERY_DTS_BLOB:
 	case CMDQ_IOCTL_NOTIFY_ENGINE:
 		/* All ioctl structures should be the same size in 32-bit and 64-bit linux. */
 		return cmdq_ioctl(pFile, code, param);

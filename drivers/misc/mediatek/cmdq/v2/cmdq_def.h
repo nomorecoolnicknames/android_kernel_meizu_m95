@@ -31,7 +31,12 @@
 #define CMDQ_PROFILE_MARKER_SUPPORT
 
 #ifdef CMDQ_PROFILE_MARKER_SUPPORT
-#define CMDQ_MAX_PROFILE_MARKER_IN_TASK (5)
+/* libdpframework (the only userspace CMDQ client) is built with 7 profile
+ * markers. profileMarker is the last field of cmdqCommandStruct and _IOW
+ * encodes sizeof(), so this must be 7 for EXEC_COMMAND (0x40E07803) and
+ * ASYNC_JOB_EXEC (0x40E87805) to match; it also bounds profileMarker.count.
+ */
+#define CMDQ_MAX_PROFILE_MARKER_IN_TASK (7)
 #endif
 
 #define CMDQ_INVALID_THREAD             (-1)

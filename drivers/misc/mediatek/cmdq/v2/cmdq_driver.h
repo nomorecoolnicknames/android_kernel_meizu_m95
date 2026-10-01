@@ -84,6 +84,24 @@ typedef struct cmdqWriteAddressStruct {
 /*  */
 #define CMDQ_IOCTL_QUERY_DTS _IOW(CMDQ_IOCTL_MAGIC_NUMBER, 11, cmdqDTSDataStruct)
 
+/*
+ * QUERY_DTS layout expected by libdpframework.so, built against a BSP with
+ * 38 GCE subsys slots (this kernel has 27). _IOW encodes sizeof():
+ *
+ *   userspace: 0x4E88780B  (size 3720 = 4*511 + 44*38 + 4*1)
+ *   native:    0x4CA4780B  (size 3236 = 4*511 + 44*27 + 4*1)
+ *
+ * Only the subsys array differs, so serve this layout and mark the extra
+ * slots invalid.
+ */
+#define CMDQ_SUBSYS_COUNT_BLOB 38
+typedef struct cmdqDTSDataBlobStruct {
+	int32_t eventTable[CMDQ_SYNC_TOKEN_MAX];
+	SubsysStruct subsys[CMDQ_SUBSYS_COUNT_BLOB];
+	uint32_t MDPBaseAddress[CMDQ_MAX_MDP_PA_BASE_COUNT];
+} cmdqDTSDataBlobStruct;
+#define CMDQ_IOCTL_QUERY_DTS_BLOB _IOW(CMDQ_IOCTL_MAGIC_NUMBER, 11, cmdqDTSDataBlobStruct)
+
 /*  */
 /* Notify MDP will use specified engine before really use. */
 /* input int is same as EngineFlag. */
