@@ -19,10 +19,17 @@
 enum mtk_ion_heap_type {
 	ION_HEAP_TYPE_MULTIMEDIA = 10,
 	ION_HEAP_TYPE_FB = 11,
+	/*
+	 * Camera image buffers are allocated through libion_mtk
+	 * ion_alloc_camera() with heap mask 1 << 12; later MTK BSPs
+	 * register an MM-type heap under this id.
+	 */
+	ION_HEAP_TYPE_MULTIMEDIA_FOR_CAMERA = 12,
 /* WARNING: DO NOT EDIT, AUTO-GENERATED CODE - SEE TOP FOR INSTRUCTIONS */
 };
 #define ION_HEAP_MULTIMEDIA_MASK (1 << ION_HEAP_TYPE_MULTIMEDIA)
 #define ION_HEAP_FB_MASK         (1 << ION_HEAP_TYPE_FB)
+#define ION_HEAP_CAMERA_MASK     (1 << ION_HEAP_TYPE_MULTIMEDIA_FOR_CAMERA)
 
 #define ION_NUM_HEAP_IDS (sizeof(unsigned int) * 8)
 #endif
