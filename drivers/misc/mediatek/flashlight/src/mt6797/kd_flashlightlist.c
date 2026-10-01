@@ -948,6 +948,114 @@ static ssize_t flash_vendor_store(struct device *dev,
 }
 
 
+/*
+ * min_duty: lower bound on the flash brightness index, applied in
+ * constant_flashlight/leds_strobe.c. 0 disables it.
+ */
+extern void FL_set_min_duty(int duty);
+extern int FL_get_min_duty(void);
+
+static ssize_t min_duty_show(struct device *dev,
+				struct device_attribute *attr,
+				char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", FL_get_min_duty());
+}
+
+static ssize_t min_duty_store(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t count)
+{
+	int duty = 0;
+
+	if (kstrtoint(buf, 10, &duty))
+		return -EINVAL;
+
+	FL_set_min_duty(duty);
+	logI("[min_duty_store] min flash duty index = %d\n", FL_get_min_duty());
+
+	return count;
+}
+
+/*
+ * torch_timeout_ms: FLASH_IOC_SET_TIME_OUT_TIME_MS value above which the
+ * LM3644 driver treats a request as torch rather than flash. The capture
+ * passes 20000.
+ */
+extern void FL_set_torch_timeout(int ms);
+extern int FL_get_torch_timeout(void);
+
+static ssize_t torch_timeout_show(struct device *dev,
+				struct device_attribute *attr,
+				char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", FL_get_torch_timeout());
+}
+
+static ssize_t torch_timeout_store(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t count)
+{
+	int ms = 0;
+
+	if (kstrtoint(buf, 10, &ms))
+		return -EINVAL;
+
+	FL_set_torch_timeout(ms);
+	logI("[torch_timeout_store] torch threshold = %d ms\n", FL_get_torch_timeout());
+
+	return count;
+}
+
+/*
+ * flash_pulse: enables the flash-mode path in constant_flashlight/leds_strobe.c
+ * (one mode flag for both LM3644 rails, gFlashDuty[] latched into
+ * REG_FLASH_LEDx_BR at enable time). 0 (default) keeps the vendor behaviour.
+ * Flash capture: torch_timeout_ms 60000, flash_pulse 1, min_duty 20 (492 mA).
+ */
+extern void FL_set_flash_pulse(int on);
+extern int FL_get_flash_pulse(void);
+
+static ssize_t flash_pulse_show(struct device *dev,
+				struct device_attribute *attr,
+				char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", FL_get_flash_pulse());
+}
+
+static ssize_t flash_pulse_store(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t count)
+{
+	int on = 0;
+
+	if (kstrtoint(buf, 10, &on))
+		return -EINVAL;
+
+	FL_set_flash_pulse(on);
+	logI("[flash_pulse_store] flash pulse path = %d\n", FL_get_flash_pulse());
+
+	return count;
+}
+
+static struct device_attribute dev_attr_flash_pulse = {
+	.attr = {.name = "flash_pulse", .mode = 0644},
+	.show = flash_pulse_show,
+	.store = flash_pulse_store,
+};
+
+static struct device_attribute dev_attr_torch_timeout = {
+	.attr = {.name = "torch_timeout_ms", .mode = 0644},
+	.show = torch_timeout_show,
+	.store = torch_timeout_store,
+};
+
+static struct device_attribute dev_attr_min_duty = {
+	.attr = {.name = "min_duty", .mode = 0644},
+	.show = min_duty_show,
+	.store = min_duty_store,
+};
+
 static struct device_attribute dev_attr_flash1 = {
 	.attr = {.name = "flash1", .mode = 0644},
 	.show = flash1_show,
@@ -1084,6 +1192,9 @@ static int flashlight_probe(struct platform_device *dev)
 	sema_init(&flashlight_private.sem, 1);
 	/* GPIO pinctrl initial */
 	flashlight_gpio_init(dev);
+	device_create_file(flashlight_device, &dev_attr_min_duty);
+	device_create_file(flashlight_device, &dev_attr_torch_timeout);
+	device_create_file(flashlight_device, &dev_attr_flash_pulse);
 	device_create_file(flashlight_device, &dev_attr_flash1);
 	device_create_file(flashlight_device, &dev_attr_flash2);
 	device_create_file(flashlight_device, &dev_attr_factory_flash);

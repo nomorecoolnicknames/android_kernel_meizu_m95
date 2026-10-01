@@ -348,9 +348,157 @@ MODULE_AUTHOR("pw <pengwei@mediatek.com>");
 MODULE_LICENSE("GPL v2");
 
 
+/*
+ * Lower bound on the brightness index of both rails, adjustable through
+ * /sys/class/flashlightdrv/kd_camera_flashlight/min_duty (0 disables it).
+ * The camera HAL asks for index 5 on one rail and 1 on the other, which
+ * leaves flash shots underexposed; 5 is the last entry of the six-entry
+ * torch table (140 mA).
+ */
+int g_minFlashDuty = 5;
+EXPORT_SYMBOL(g_minFlashDuty);
+
+/* Timeout above which FLASH_IOC_SET_TIME_OUT_TIME_MS is read as "torch". */
+int g_torchTimeoutMs = 10000;
+EXPORT_SYMBOL(g_torchTimeoutMs);
+
+/*
+ * flash_pulse (off by default). Together with torch_timeout_ms > 20000, which
+ * puts the capture into flash mode, it enables:
+ *
+ *   a) both LM3644 rails deciding the mode from their own
+ *      FLASH_IOC_SET_TIME_OUT_TIME_MS (see FL_set_mode_from_timeout), and
+ *   b) FL_Enable_led1/2 writing gFlashDuty[] into REG_FLASH_LEDx_BR, which
+ *      the capture path never programs otherwise
+ *      (see FL_latch_flash_duty_led1/2).
+ */
+int g_flashPulse;
+EXPORT_SYMBOL(g_flashPulse);
+
+void FL_set_flash_pulse(int on)
+{
+	g_flashPulse = on ? 1 : 0;
+}
+EXPORT_SYMBOL(FL_set_flash_pulse);
+
+int FL_get_flash_pulse(void)
+{
+	return g_flashPulse;
+}
+EXPORT_SYMBOL(FL_get_flash_pulse);
+
+/*
+ * Torch/flash rule shared by both rails. The static torch_flag above is the
+ * only one built (leds_control.c is not in the Makefile), so the second rail
+ * has no mode flag of its own.
+ */
+void FL_set_mode_from_timeout(unsigned long arg)
+{
+	if (arg == 0 || arg > (unsigned long)g_torchTimeoutMs)
+		torch_flag = true;
+	else
+		torch_flag = false;
+}
+EXPORT_SYMBOL(FL_set_mode_from_timeout);
+
+void FL_set_torch_timeout(int ms)
+{
+	if (ms < 0)
+		ms = 0;
+	g_torchTimeoutMs = ms;
+}
+EXPORT_SYMBOL(FL_set_torch_timeout);
+
+int FL_get_torch_timeout(void)
+{
+	return g_torchTimeoutMs;
+}
+EXPORT_SYMBOL(FL_get_torch_timeout);
+
+void FL_set_min_duty(int duty)
+{
+	if (duty < 0)
+		duty = 0;
+	if (duty > DUTY_NUM - 1)
+		duty = DUTY_NUM - 1;
+	g_minFlashDuty = duty;
+}
+EXPORT_SYMBOL(FL_set_min_duty);
+
+int FL_get_min_duty(void)
+{
+	return g_minFlashDuty;
+}
+EXPORT_SYMBOL(FL_get_min_duty);
+
+/*
+ * gFlashDuty has DUTY_NUM (39) entries, gTorchDuty only six, while the vendor
+ * code clamps to DUTY_NUM - 1 in both modes. Clamp per table so a raised
+ * index cannot read past the end of gTorchDuty.
+ */
+#define TORCH_DUTY_NUM	((int)(sizeof(gTorchDuty) / sizeof(gTorchDuty[0])))
+
+static kal_uint32 FL_clamp_duty(kal_uint32 duty)
+{
+	int top = torch_flag ? TORCH_DUTY_NUM - 1 : DUTY_NUM - 1;
+
+	if (g_minFlashDuty > 0 && duty < (kal_uint32)g_minFlashDuty)
+		duty = (kal_uint32)g_minFlashDuty;
+	if (duty > (kal_uint32)top)
+		duty = (kal_uint32)top;
+	return duty;
+}
+
+/*
+ * Last index each rail requested, before clamping ([0] = led1, [1] = led2).
+ * The duty is set while the driver is still in torch mode, so re-clamping the
+ * raw request at enable time lets min_duty reach the 39-entry flash table.
+ */
+static int gRawDuty[2];
+
+/*
+ * Write gFlashDuty[] into the flash brightness register for one rail.
+ * The capture only sends SET_TIME_OUT_TIME_MS and SET_ONOFF; SET_DUTY comes
+ * from the 3A pre-flash while still in torch mode and lands in
+ * REG_TORCH_LEDx_BR, so nothing else programs REG_FLASH_LEDx_BR.
+ */
+static void FL_latch_flash_duty_led1(void)
+{
+	u8 buf[2];
+	kal_uint32 duty = FL_clamp_duty((kal_uint32)gRawDuty[0]);
+
+	buf[0] = REG_FLASH_LED1_BR;
+	buf[1] = gFlashDuty[duty];
+	LM3644_write_reg(LM3644_i2c_client, buf[0], buf[1]);
+	PK_DBG("[LM3644] latch led1 flash duty=0x%X (index %d),flash mode\n",
+	       buf[1], (int)duty);
+}
+
+static void FL_latch_flash_duty_led2(void)
+{
+	u8 buf[2];
+	kal_uint32 duty = FL_clamp_duty((kal_uint32)gRawDuty[1]);
+
+	/* As in the flash branch of FL_dim_duty_led2: LED1's brightness
+	 * register drives both rails while bit7 is set, so clear it first.
+	 */
+	buf[0] = REG_FLASH_LED1_BR;
+	buf[1] = LM3644_read_reg(LM3644_i2c_client, buf[0]);
+	buf[1] = buf[1] & 0x7f;
+	LM3644_write_reg(LM3644_i2c_client, buf[0], buf[1]);
+
+	buf[0] = REG_FLASH_LED2_BR;
+	buf[1] = gFlashDuty[duty];
+	LM3644_write_reg(LM3644_i2c_client, buf[0], buf[1]);
+	PK_DBG("[LM3644] latch led2 flash duty=0x%X (index %d),flash mode\n",
+	       buf[1], (int)duty);
+}
+
 int FL_dim_duty_led1(kal_uint32 duty)
 {
     u8 buf[2];
+    gRawDuty[0] = (int)duty;
+    duty = FL_clamp_duty(duty);
     if(duty>DUTY_NUM-1)
         duty=DUTY_NUM-1;
     if(duty<0)
@@ -373,6 +521,8 @@ int FL_dim_duty_led1(kal_uint32 duty)
 int FL_dim_duty_led2(kal_uint32 duty)
 {
     u8 buf[2];
+    gRawDuty[1] = (int)duty;
+    duty = FL_clamp_duty(duty);
     if(duty>DUTY_NUM-1)
         duty=DUTY_NUM-1;
     if(duty<0)
@@ -410,6 +560,10 @@ int FL_Enable_led1(void)
 {
 	
     u8 buf[2];
+
+    if (g_flashPulse && !torch_flag)
+        FL_latch_flash_duty_led1();
+
     buf[0]=REG_ENABLE;
     buf[1]=LM3644_read_reg(LM3644_i2c_client,buf[0]);
 
@@ -432,6 +586,10 @@ int FL_Enable_led2(void)
 {
 	
     u8 buf[2];
+
+    if (g_flashPulse && !torch_flag)
+        FL_latch_flash_duty_led2();
+
     buf[0]=REG_ENABLE;
     buf[1]=LM3644_read_reg(LM3644_i2c_client,buf[0]);
     
@@ -583,10 +741,15 @@ static int constant_flashlight_ioctl(unsigned int cmd, unsigned long arg)
 
 	case FLASH_IOC_SET_TIME_OUT_TIME_MS:
 		PK_DBG("FLASH_IOC_SET_TIME_OUT_TIME_MS: %d\n",(int)arg);
-		if (arg == 0 || arg > 10000)
-			torch_flag = true;
-		else
-			torch_flag = false;
+		/*
+		 * Torch uses timeout 0 (framework torch, 3A pre-flash); the
+		 * capture sets 20000. With the default 10000 ceiling the
+		 * capture therefore runs on the torch table (140 mA max)
+		 * rather than the flash table (996 mA): the LM3644 cuts a
+		 * flash pulse at ~400 ms (REG_FLASH_TOUT 0x0f), shorter than
+		 * the ~550 ms capture window. See torch_timeout_ms in sysfs.
+		 */
+		FL_set_mode_from_timeout(arg);
 		g_timeOutTimeMs=arg;
 		break;
 
@@ -621,8 +784,23 @@ static int constant_flashlight_ioctl(unsigned int cmd, unsigned long arg)
 				hrtimer_cancel( &g_timeOutTimer );
     		}
     		break;
+	/*
+	 * The 3A HAL asks for the pre-on time before every flash and uses
+	 * it to align the flash with the exposure; an error leaves the
+	 * flash outside the frame. The LED is lit synchronously in
+	 * FL_Enable with no separate pre-on stage, so the answer is 0 ms.
+	 */
+	case FLASH_IOC_PRE_ON:
+	case FLASH_IOC_GET_PRE_ON_TIME_MS:
+	case FLASH_IOC_GET_PRE_ON_TIME_MS_DUTY:
+		PK_DBG("FLASH_IOC pre-on nr=%d arg=%d -> 0 ms\n",
+		       (int)_IOC_NR(cmd), (int)arg);
+		i4RetValue = 0;
+		break;
+
 	default :
-    		PK_DBG(" No such command \n");
+    		PK_DBG(" No such command: cmd=0x%08x nr=%d arg=%d\n",
+    		       (unsigned int)cmd, (int)_IOC_NR(cmd), (int)arg);
     		i4RetValue = -EPERM;
     		break;
     }

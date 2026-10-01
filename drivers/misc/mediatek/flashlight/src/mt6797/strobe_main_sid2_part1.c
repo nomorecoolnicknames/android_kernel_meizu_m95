@@ -56,8 +56,15 @@
 #endif
 
 extern bool led1_onoff;
-extern bool torch_flag;
 extern int led1_duty;
+
+/*
+ * No local torch_flag: this rail is switched by the static one in
+ * constant_flashlight/leds_strobe.c (leds_control.c is not built).
+ * FL_set_mode_from_timeout applies the same rule from both rails.
+ */
+extern void FL_set_mode_from_timeout(unsigned long arg);
+extern int FL_get_flash_pulse(void);
 
 int led2_duty;
 
@@ -187,6 +194,12 @@ static int constant_flashlight_ioctl(unsigned int cmd, unsigned long arg)
 
 	case FLASH_IOC_SET_TIME_OUT_TIME_MS:
 		PK_DBG("FLASH_IOC_SET_TIME_OUT_TIME_MS: %d\n", (int)arg);
+		/*
+		 * With flash_pulse on, both rails set the mode through the
+		 * same rule instead of depending on which was served last.
+		 */
+		if (FL_get_flash_pulse())
+			FL_set_mode_from_timeout(arg);
 		g_timeOutTimeMs = arg;
 		break;
 
@@ -260,8 +273,20 @@ static int constant_flashlight_ioctl(unsigned int cmd, unsigned long arg)
 		i4RetValue = detLowPowerEnd();
 		break;
 
+	/* Same pre-on answer as constant_flashlight/leds_strobe.c: both LM3644
+	 * rails receive these commands.
+	 */
+	case FLASH_IOC_PRE_ON:
+	case FLASH_IOC_GET_PRE_ON_TIME_MS:
+	case FLASH_IOC_GET_PRE_ON_TIME_MS_DUTY:
+		PK_DBG("FLASH_IOC pre-on nr=%d arg=%d -> 0 ms\n",
+		       (int)_IOC_NR(cmd), (int)arg);
+		i4RetValue = 0;
+		break;
+
 	default:
-		PK_DBG(" No such command\n");
+		PK_DBG(" No such command: cmd=0x%08x nr=%d arg=%d\n",
+		       (unsigned int)cmd, (int)_IOC_NR(cmd), (int)arg);
 		i4RetValue = -EPERM;
 		break;
 	}
