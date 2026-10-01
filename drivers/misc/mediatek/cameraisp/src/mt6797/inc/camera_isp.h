@@ -537,8 +537,39 @@ typedef enum {
 	ISP_CMD_ION_IMPORT, /* get ion handle */
 	ISP_CMD_ION_FREE,  /* free ion handle */
 	ISP_CMD_CQ_SW_PATCH,  /* sim cq update behavior as atomic behavior */
-	ISP_CMD_ION_FREE_BY_HWMODULE  /* free all ion handle */
+	ISP_CMD_ION_FREE_BY_HWMODULE,  /* free all ion handle */
+	/*
+	 * libcamdrv_isp.so calls 38 (IspDrvDipPhy::setMemInfo) on every stream
+	 * configuration. 36 and 37 only keep 38 at that number and are not
+	 * implemented.
+	 */
+	ISP_CMD_DUMP_BUFFER,          /* 36, not implemented here */
+	ISP_CMD_GET_DUMP_INFO,        /* 37, not implemented here */
+	ISP_CMD_SET_MEM_INFO          /* 38, tpipe / cmdq dump-address registration */
 } ISP_CMD_ENUM;
+
+/*
+ * Dump-address registration type sent by the camera HAL: 1 = tpipe, 2 = CQ
+ * (the latter taken from the HAL's "set cmdq mem info fail" error string).
+ */
+#define ISP_MEMORY_INFO_TPIPE_CMD	1
+#define ISP_MEMORY_INFO_CMDQ_CMD	2
+
+typedef struct {
+	unsigned int MemInfoCmd;
+	unsigned int MemPa;
+	unsigned int *MemVa;
+	unsigned int MemSizeDiff;
+} ISP_MEM_INFO_STRUCT;
+
+#ifdef CONFIG_COMPAT
+typedef struct {
+	compat_uint_t MemInfoCmd;
+	compat_uint_t MemPa;
+	compat_uptr_t MemVa;
+	compat_uint_t MemSizeDiff;
+} compat_ISP_MEM_INFO_STRUCT;
+#endif
 
 typedef enum {
 	ISP_HALT_DMA_IMGO = 0,
@@ -601,6 +632,11 @@ typedef enum {
 #define ISP_ION_FREE                _IOW(ISP_MAGIC, ISP_CMD_ION_FREE,   ISP_DEV_ION_NODE_STRUCT)
 #define ISP_ION_FREE_BY_HWMODULE    _IOW(ISP_MAGIC, ISP_CMD_ION_FREE_BY_HWMODULE, unsigned int)
 #define ISP_CQ_SW_PATCH             _IOW(ISP_MAGIC, ISP_CMD_CQ_SW_PATCH, unsigned int)
+/*
+ * The native struct is 24 bytes (MemVa is a pointer on arm64). The 32-bit
+ * camera provider sends the 16-byte compat form below, 0xC0106B26.
+ */
+#define ISP_SET_MEM_INFO            _IOWR(ISP_MAGIC, ISP_CMD_SET_MEM_INFO, ISP_MEM_INFO_STRUCT)
 
 #ifdef CONFIG_COMPAT
 #define COMPAT_ISP_READ_REGISTER    _IOWR(ISP_MAGIC, ISP_CMD_READ_REG,      compat_ISP_REG_IO_STRUCT)
@@ -621,6 +657,7 @@ typedef enum {
 #define COMPAT_ISP_RESET_BY_HWMODULE _IOW(ISP_MAGIC, ISP_CMD_RESET_BY_HWMODULE, compat_uptr_t)
 #define COMPAT_ISP_VF_LOG           _IOW(ISP_MAGIC, ISP_CMD_VF_LOG,         compat_uptr_t)
 #define COMPAT_ISP_CQ_SW_PATCH      _IOW(ISP_MAGIC, ISP_CMD_CQ_SW_PATCH,         compat_uptr_t)
+#define COMPAT_ISP_SET_MEM_INFO     _IOWR(ISP_MAGIC, ISP_CMD_SET_MEM_INFO, compat_ISP_MEM_INFO_STRUCT)
 #endif
 
 int32_t ISP_MDPClockOnCallback(uint64_t engineFlag);
