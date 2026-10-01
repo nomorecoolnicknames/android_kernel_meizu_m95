@@ -14,6 +14,9 @@
 #ifndef __GED_BRIDGE_H__
 #define __GED_BRIDGE_H__
 
+/* GED_IO* below expand to _IO*(). */
+#include <linux/ioctl.h>
+
 #include "ged_base.h"
 #include "ged_log.h"
 #include "ged_type.h"
@@ -56,6 +59,17 @@ typedef enum
     GED_BRIDGE_COMMAND_DVFS_PROBE,
     GED_BRIDGE_COMMAND_DVFS_UM_RETURN,
 	GED_BRIDGE_COMMAND_EVENT_NOTIFY,
+
+	/*
+	 * gralloc_extra ("GE"), numbered from 100 by MediaTek. These are
+	 * the _IOC_NRs libged.so sends (0xC0286764..0xC0286768), see the
+	 * BUILD_BUG_ON block in ged_ge_init().
+	 */
+	GED_BRIDGE_COMMAND_GE_ALLOC = 100,
+	GED_BRIDGE_COMMAND_GE_RETAIN,
+	GED_BRIDGE_COMMAND_GE_RELEASE,
+	GED_BRIDGE_COMMAND_GE_GET,
+	GED_BRIDGE_COMMAND_GE_SET,
 } GED_BRIDGE_COMMAND_ID;
 
 #define GED_BRIDGE_IO_LOG_BUF_GET			GED_IOWR(GED_BRIDGE_COMMAND_LOG_BUF_GET)
@@ -68,6 +82,12 @@ typedef enum
 #define GED_BRIDGE_IO_DVFS_PROBE       GED_IOWR(GED_BRIDGE_COMMAND_DVFS_PROBE)
 #define GED_BRIDGE_IO_DVFS_UM_RETURN GED_IOWR(GED_BRIDGE_COMMAND_DVFS_UM_RETURN)
 #define GED_BRIDGE_IO_EVENT_NOTIFY GED_IOWR(GED_BRIDGE_COMMAND_EVENT_NOTIFY)
+
+#define GED_BRIDGE_IO_GE_ALLOC		GED_IOWR(GED_BRIDGE_COMMAND_GE_ALLOC)
+#define GED_BRIDGE_IO_GE_RETAIN		GED_IOWR(GED_BRIDGE_COMMAND_GE_RETAIN)
+#define GED_BRIDGE_IO_GE_RELEASE	GED_IOWR(GED_BRIDGE_COMMAND_GE_RELEASE)
+#define GED_BRIDGE_IO_GE_GET		GED_IOWR(GED_BRIDGE_COMMAND_GE_GET)
+#define GED_BRIDGE_IO_GE_SET		GED_IOWR(GED_BRIDGE_COMMAND_GE_SET)
 
 /*****************************************************************************
  *  LOG_BUF_GET
@@ -244,6 +264,77 @@ typedef struct GED_BRIDGE_OUT_EVENT_NOTIFY_TAG
 } GED_BRIDGE_OUT_EVENT_NOTIFY;
 
 /*****************************************************************************
+ *  GRALLOC_EXTRA (GE)
+ *
+ *  Layouts match the vendor libged.so; ged_ge_init() asserts them with
+ *  BUILD_BUG_ON.
+ *****************************************************************************/
+
+/* Bridge in structure for GE_ALLOC, in-size 4 + 4 * region_num */
+typedef struct GED_BRIDGE_IN_GE_ALLOC_TAG {
+	int region_num;
+	uint32_t region_sizes[0];
+} GED_BRIDGE_IN_GE_ALLOC;
+
+/* Bridge out structure for GE_ALLOC, out-size 8 */
+typedef struct GED_BRIDGE_OUT_GE_ALLOC_TAG {
+	uint32_t ge_hnd;
+	GED_ERROR eError;
+} GED_BRIDGE_OUT_GE_ALLOC;
+
+/* Bridge in structure for GE_RETAIN, in-size 4 */
+typedef struct GED_BRIDGE_IN_GE_RETAIN_TAG {
+	uint32_t ge_hnd;
+} GED_BRIDGE_IN_GE_RETAIN;
+
+/* Bridge out structure for GE_RETAIN, out-size 8 */
+typedef struct GED_BRIDGE_OUT_GE_RETAIN_TAG {
+	int32_t ref;
+	GED_ERROR eError;
+} GED_BRIDGE_OUT_GE_RETAIN;
+
+/* Bridge in structure for GE_RELEASE, same shape as GE_RETAIN */
+typedef struct GED_BRIDGE_IN_GE_RELEASE_TAG {
+	uint32_t ge_hnd;
+} GED_BRIDGE_IN_GE_RELEASE;
+
+/* Bridge out structure for GE_RELEASE, out-size 8 */
+typedef struct GED_BRIDGE_OUT_GE_RELEASE_TAG {
+	int32_t ref;
+	GED_ERROR eError;
+} GED_BRIDGE_OUT_GE_RELEASE;
+
+/* Bridge in structure for GE_GET, in-size 16 */
+typedef struct GED_BRIDGE_IN_GE_GET_TAG {
+	uint32_t ge_hnd;
+	int region_id;
+	int uint32_offset;
+	int uint32_size;
+} GED_BRIDGE_IN_GE_GET;
+
+/* Bridge out structure for GE_GET: eError, then the payload at offset 4.
+ * Userspace sizes it as 16 + 4 * uint32_size; do not rely on the surplus.
+ */
+typedef struct GED_BRIDGE_OUT_GE_GET_TAG {
+	GED_ERROR eError;
+	uint32_t data[0];
+} GED_BRIDGE_OUT_GE_GET;
+
+/* Bridge in structure for GE_SET, in-size 16 + 4 * uint32_size */
+typedef struct GED_BRIDGE_IN_GE_SET_TAG {
+	uint32_t ge_hnd;
+	int region_id;
+	int uint32_offset;
+	int uint32_size;
+	uint32_t data[0];
+} GED_BRIDGE_IN_GE_SET;
+
+/* Bridge out structure for GE_SET, out-size 4 */
+typedef struct GED_BRIDGE_OUT_GE_SET_TAG {
+	GED_ERROR eError;
+} GED_BRIDGE_OUT_GE_SET;
+
+/*****************************************************************************
  *  BRIDGE FUNCTIONS
  *****************************************************************************/
 
@@ -284,7 +375,27 @@ int ged_bridge_dvfs_um_retrun(
     GED_BRIDGE_OUT_DVFS_UM_RETURN *psDVFS_UM_returnOUT);
 
 int ged_bridge_event_notify(
-		GED_BRIDGE_IN_EVENT_NOTIFY *psEVENT_NOTIFYINT, 
+		GED_BRIDGE_IN_EVENT_NOTIFY *psEVENT_NOTIFYINT,
 		GED_BRIDGE_OUT_EVENT_NOTIFY *psEVENT_NOTIFYOUT);
+
+int ged_bridge_ge_alloc(
+	GED_BRIDGE_IN_GE_ALLOC *psALLOC_IN,
+	GED_BRIDGE_OUT_GE_ALLOC *psALLOC_OUT);
+
+int ged_bridge_ge_retain(
+	GED_BRIDGE_IN_GE_RETAIN *psRETAIN_IN,
+	GED_BRIDGE_OUT_GE_RETAIN *psRETAIN_OUT);
+
+int ged_bridge_ge_release(
+	GED_BRIDGE_IN_GE_RELEASE *psRELEASE_IN,
+	GED_BRIDGE_OUT_GE_RELEASE *psRELEASE_OUT);
+
+int ged_bridge_ge_get(
+	GED_BRIDGE_IN_GE_GET *psGET_IN,
+	GED_BRIDGE_OUT_GE_GET *psGET_OUT);
+
+int ged_bridge_ge_set(
+	GED_BRIDGE_IN_GE_SET *psSET_IN,
+	GED_BRIDGE_OUT_GE_SET *psSET_OUT);
 
 #endif

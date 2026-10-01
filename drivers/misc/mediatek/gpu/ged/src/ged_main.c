@@ -36,6 +36,7 @@
 #include "ged_monitor_3D_fence.h"
 #include "ged_notify_sw_vsync.h"
 #include "ged_dvfs.h"
+#include "ged_ge.h"
 
 
 #define GED_DRIVER_DEVICE_NAME "ged"
@@ -65,12 +66,25 @@ static void* gvIOCTLParamBuf = NULL;
  *****************************************************************************/
 static int ged_open(struct inode *inode, struct file *filp)
 {
+	/* gralloc_extra hangs a GED_FILE_PRIVATE_BASE off private_data on the
+	 * first GE_ALLOC/GE_RETAIN this fd performs; until then it stays NULL.
+	 */
+	filp->private_data = NULL;
 	GED_LOGE("%s:%d:%d\n", __func__, MAJOR(inode->i_rdev), MINOR(inode->i_rdev));
 	return 0;
 }
 
 static int ged_release(struct inode *inode, struct file *filp)
 {
+	/* Drop every GE entry this fd still holds, so a crashing client
+	 * does not leak pool slots (there are only GE_POOL_ENTRY_SIZE).
+	 */
+	if (filp->private_data) {
+		GED_FILE_PRIVATE_BASE *base = filp->private_data;
+
+		base->free_func(base);
+		filp->private_data = NULL;
+	}
 	GED_LOGE("%s:%d:%d\n", __func__, MAJOR(inode->i_rdev), MINOR(inode->i_rdev));
 	return 0;
 }
@@ -90,10 +104,123 @@ static ssize_t ged_write(struct file *filp, const char __user *buf, size_t count
 	return 0;
 }
 
-static long ged_dispatch(GED_BRIDGE_PACKAGE *psBridgePackageKM)
+/*
+ * The GE commands have variable-length buffers, and pvInt/pvOut are slices
+ * of a global scratch buffer that is not cleared between ioctls, so check
+ * the sizes before dispatching. Returns 0 when the sizes are acceptable.
+ */
+static int ged_check_ge_sizes(unsigned int bridge_id, void *pvInt,
+		int in_size, int out_size)
+{
+	switch (bridge_id) {
+	case GED_BRIDGE_COMMAND_GE_ALLOC:
+	{
+		GED_BRIDGE_IN_GE_ALLOC *in = pvInt;
+		size_t need;
+
+		if (in_size < (int)sizeof(GED_BRIDGE_IN_GE_ALLOC) ||
+		    out_size < (int)sizeof(GED_BRIDGE_OUT_GE_ALLOC))
+			return -1;
+		if (in->region_num <= 0 || in->region_num > GE_MAX_REGION_NUM)
+			return -1;
+		need = sizeof(GED_BRIDGE_IN_GE_ALLOC) +
+			(size_t)in->region_num * sizeof(uint32_t);
+		if ((size_t)in_size < need)
+			return -1;
+		return 0;
+	}
+	case GED_BRIDGE_COMMAND_GE_RETAIN:
+		if (in_size < (int)sizeof(GED_BRIDGE_IN_GE_RETAIN) ||
+		    out_size < (int)sizeof(GED_BRIDGE_OUT_GE_RETAIN))
+			return -1;
+		return 0;
+	case GED_BRIDGE_COMMAND_GE_RELEASE:
+		if (in_size < (int)sizeof(GED_BRIDGE_IN_GE_RELEASE) ||
+		    out_size < (int)sizeof(GED_BRIDGE_OUT_GE_RELEASE))
+			return -1;
+		return 0;
+	case GED_BRIDGE_COMMAND_GE_GET:
+	{
+		GED_BRIDGE_IN_GE_GET *in = pvInt;
+		size_t need;
+
+		if (in_size < (int)sizeof(GED_BRIDGE_IN_GE_GET))
+			return -1;
+		if (in->uint32_size < 0)
+			return -1;
+		need = sizeof(GED_BRIDGE_OUT_GE_GET) +
+			(size_t)in->uint32_size * sizeof(uint32_t);
+		if ((size_t)out_size < need)
+			return -1;
+		return 0;
+	}
+	case GED_BRIDGE_COMMAND_GE_SET:
+	{
+		GED_BRIDGE_IN_GE_SET *in = pvInt;
+		size_t need;
+
+		if (in_size < (int)sizeof(GED_BRIDGE_IN_GE_SET) ||
+		    out_size < (int)sizeof(GED_BRIDGE_OUT_GE_SET))
+			return -1;
+		if (in->uint32_size < 0)
+			return -1;
+		need = sizeof(GED_BRIDGE_IN_GE_SET) +
+			(size_t)in->uint32_size * sizeof(uint32_t);
+		if ((size_t)in_size < need)
+			return -1;
+		return 0;
+	}
+	default:
+		return 0;
+	}
+}
+
+/*
+ * Track the GE handles this fd owns, so ged_release() can drop them. Called
+ * after the handler has run, on the same in/out buffers it saw.
+ */
+static void ged_track_ge_refs(struct file *pFile, unsigned int bridge_id,
+		void *pvInt, void *pvOut)
+{
+	switch (bridge_id) {
+	case GED_BRIDGE_COMMAND_GE_ALLOC:
+		/* Not tracked against the creating file: a gralloc_extra
+		 * handle belongs to a graphic buffer that outlives the
+		 * allocating fd and is shared with other processes. The
+		 * ALLOC reference is dropped only by an explicit GE_RELEASE
+		 * when gralloc destroys the buffer.
+		 */
+		break;
+	case GED_BRIDGE_COMMAND_GE_RETAIN:
+	{
+		GED_BRIDGE_IN_GE_RETAIN *in = pvInt;
+		GED_BRIDGE_OUT_GE_RETAIN *out = pvOut;
+
+		if (out->eError == GED_OK &&
+		    ged_ge_init_context(&pFile->private_data) == 0)
+			ged_ge_context_ref(pFile->private_data, in->ge_hnd);
+		break;
+	}
+	case GED_BRIDGE_COMMAND_GE_RELEASE:
+	{
+		GED_BRIDGE_IN_GE_RELEASE *in = pvInt;
+		GED_BRIDGE_OUT_GE_RELEASE *out = pvOut;
+
+		if (out->eError == GED_OK)
+			ged_ge_context_deref(pFile->private_data, in->ge_hnd);
+		break;
+	}
+	default:
+		break;
+	}
+}
+
+static long ged_dispatch(struct file *pFile, GED_BRIDGE_PACKAGE *psBridgePackageKM)
 {
 	int ret = -EFAULT;
 	void *pvInt, *pvOut;
+	unsigned int bridge_id =
+		GED_GET_BRIDGE_ID(psBridgePackageKM->ui32FunctionID);
 	typedef int (ged_bridge_func_type)(void*, void*);
 	ged_bridge_func_type* pFunc = NULL;
 
@@ -111,8 +238,18 @@ static long ged_dispatch(GED_BRIDGE_PACKAGE *psBridgePackageKM)
 			}
 		}
 
+		if (0 != ged_check_ge_sizes(bridge_id, pvInt,
+				psBridgePackageKM->i32InBufferSize,
+				psBridgePackageKM->i32OutBufferSize))
+		{
+			GED_LOGE("bad GE buffer sizes for Bridge ID %u: in %d out %d\n",
+				bridge_id, psBridgePackageKM->i32InBufferSize,
+				psBridgePackageKM->i32OutBufferSize);
+			return -EINVAL;
+		}
+
 		// we will change the below switch into a function pointer mapping table in the future
-		switch(GED_GET_BRIDGE_ID(psBridgePackageKM->ui32FunctionID))
+		switch(bridge_id)
 		{
 			case GED_BRIDGE_COMMAND_LOG_BUF_GET:
 				pFunc = (ged_bridge_func_type*)ged_bridge_log_buf_get;
@@ -144,14 +281,31 @@ static long ged_dispatch(GED_BRIDGE_PACKAGE *psBridgePackageKM)
 			case GED_BRIDGE_COMMAND_EVENT_NOTIFY:
 				pFunc = (ged_bridge_func_type*)ged_bridge_event_notify;
 				break;
+			case GED_BRIDGE_COMMAND_GE_ALLOC:
+				pFunc = (ged_bridge_func_type*)ged_bridge_ge_alloc;
+				break;
+			case GED_BRIDGE_COMMAND_GE_RETAIN:
+				pFunc = (ged_bridge_func_type*)ged_bridge_ge_retain;
+				break;
+			case GED_BRIDGE_COMMAND_GE_RELEASE:
+				pFunc = (ged_bridge_func_type*)ged_bridge_ge_release;
+				break;
+			case GED_BRIDGE_COMMAND_GE_GET:
+				pFunc = (ged_bridge_func_type*)ged_bridge_ge_get;
+				break;
+			case GED_BRIDGE_COMMAND_GE_SET:
+				pFunc = (ged_bridge_func_type*)ged_bridge_ge_set;
+				break;
 			default:
-				GED_LOGE("Unknown Bridge ID: %u\n", GED_GET_BRIDGE_ID(psBridgePackageKM->ui32FunctionID));
+				GED_LOGE("Unknown Bridge ID: %u\n", bridge_id);
 				break;
 		}
 
 		if (pFunc)
 		{
 			ret = pFunc(pvInt, pvOut);
+
+			ged_track_ge_refs(pFile, bridge_id, pvInt, pvOut);
 		}
 
 		if (psBridgePackageKM->i32OutBufferSize > 0)
@@ -187,7 +341,7 @@ static long ged_ioctl(struct file *pFile, unsigned int ioctlCmd, unsigned long a
 		goto unlock_and_return;
 	}
 
-	ret = ged_dispatch(psBridgePackageKM);
+	ret = ged_dispatch(pFile, psBridgePackageKM);
 
 unlock_and_return:
 	up(&ged_dal_sem);
@@ -233,7 +387,7 @@ static long ged_ioctl_compat(struct file *pFile, unsigned int ioctlCmd, unsigned
 	sBridgePackageKM64.i32InBufferSize = psBridgePackageKM32->i32InBufferSize;
 	sBridgePackageKM64.i32OutBufferSize = psBridgePackageKM32->i32OutBufferSize;
 
-	ret = ged_dispatch(&sBridgePackageKM64);
+	ret = ged_dispatch(pFile, &sBridgePackageKM64);
 
 unlock_and_return:
 	up(&ged_dal_sem);
@@ -285,6 +439,8 @@ static void ged_exit(void)
 	ghLogBuf_FENCE = 0;
 	ged_log_buf_free(ghLogBuf_HWC);
 	ghLogBuf_HWC = 0;
+
+	ged_ge_exit();
 
 	ged_dvfs_system_exit();
 
@@ -367,6 +523,13 @@ static int ged_init(void)
 	if (unlikely(err != GED_OK))
 	{
 		GED_LOGE("ged: failed to init common dvfs!\n");
+		goto ERROR;
+	}
+
+	err = ged_ge_init();
+	if (unlikely(err != GED_OK))
+	{
+		GED_LOGE("ged: failed to init gralloc_extra!\n");
 		goto ERROR;
 	}
 
