@@ -101,7 +101,7 @@ typedef struct compat_disp_session_input_config_t {
 	compat_uint_t setter;
 	compat_uint_t session_id;
 	compat_uint_t config_layer_num;
-	compat_disp_input_config config[8];
+	compat_disp_input_config config[12];
 } compat_disp_session_input_config;
 
 typedef struct compat_disp_present_fence_info_t {
@@ -136,6 +136,8 @@ typedef struct compat_disp_caps_t {
 	compat_uint_t disp_feature;
 	compat_uint_t is_support_frame_cfg_ioctl;
 	compat_uint_t is_output_rotated;
+	/* Mirrors the rsz_in_res_list appended to disp_caps_info. */
+	compat_uint_t rsz_in_res_list[RSZ_RES_LIST_NUM][2];
 } compat_disp_caps_info;
 
 
@@ -194,6 +196,9 @@ typedef struct compat_disp_session_info_t {
 	compat_uint_t vsyncFPS;
 	compat_uint_t physicalWidth;
 	compat_uint_t physicalHeight;
+	/* Physical size in micrometres, see disp_session_info. */
+	compat_uint_t physicalWidthUm;
+	compat_uint_t physicalHeightUm;
 	compat_uint_t isConnected;
 	compat_uint_t isHDCPSupported;
 	compat_uint_t isOVLDisabled;

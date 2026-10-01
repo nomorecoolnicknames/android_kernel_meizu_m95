@@ -3277,6 +3277,9 @@ int primary_display_init(char *lcm_name, unsigned int lcm_fps, int is_lcm_inited
 		if (primary_display_is_video_mode())
 			dpmgr_path_trigger(pgc->dpmgr_handle, NULL, 0);
 	}
+	if (ret)
+		pr_err("primary_display_init: disp_lcm_init(force=%d) failed: %d\n",
+		       is_lcm_inited ? 0 : 1, ret);
 
 	set_enterulps(0);
 
@@ -4976,6 +4979,9 @@ int primary_display_frame_cfg(struct disp_frame_cfg_t *cfg)
 		dprec_start(trigger_event, proc_name, 0);
 	}
 
+	/* Without a valid present_fence_idx the present fence never signals
+	 * and surfaceflinger stops latching. Its offset is locked by the
+	 * BUILD_BUG_ON block in _ioctl_frame_config(). */
 	if (cfg->present_fence_idx != (unsigned int)-1)
 		primary_display_update_present_fence(cfg->present_fence_idx);
 
@@ -5474,6 +5480,10 @@ int primary_display_get_info(disp_session_info *info)
 
 	dispif_info->physicalWidth = DISP_GetActiveWidth();
 	dispif_info->physicalHeight = DISP_GetActiveHeight();
+	/* Same values in micrometres; the vendor HWC prefers these and only
+	 * multiplies the millimetre pair by 1000 when they are zero. */
+	dispif_info->physicalWidthUm = DISP_GetActiveWidth() * 1000;
+	dispif_info->physicalHeightUm = DISP_GetActiveHeight() * 1000;
 
 	dispif_info->vsyncFPS = pgc->lcm_fps;
 

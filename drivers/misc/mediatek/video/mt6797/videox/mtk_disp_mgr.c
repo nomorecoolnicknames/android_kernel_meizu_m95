@@ -31,6 +31,7 @@
 #include <linux/spinlock.h>
 #include <linux/param.h>
 #include <linux/uaccess.h>
+#include <linux/stddef.h>
 #include <linux/sched.h>
 #include <linux/string.h>
 #include <linux/workqueue.h>
@@ -1187,7 +1188,23 @@ static int __frame_config_trigger(struct disp_frame_cfg_t *frame_cfg)
 
 int _ioctl_frame_config(unsigned long arg)
 {
-	struct disp_frame_cfg_t *frame_cfg = kzalloc(sizeof(struct disp_frame_cfg_t), GFP_KERNEL);
+	struct disp_frame_cfg_t *frame_cfg;
+
+	/* These layouts are dictated by the vendor HWC; assert the offsets
+	 * it writes so a header change breaks the build, not the device. */
+	BUILD_BUG_ON(sizeof(disp_input_config) != 120);
+	BUILD_BUG_ON(offsetof(disp_input_config, src_fence_fd) != 56);
+	BUILD_BUG_ON(offsetof(disp_input_config, layer_id) != 112);
+	BUILD_BUG_ON(offsetof(disp_input_config, layer_enable) != 113);
+	BUILD_BUG_ON(sizeof(disp_output_config) != 80);
+	BUILD_BUG_ON(sizeof(layer_config) != 28);
+	BUILD_BUG_ON(sizeof(struct disp_frame_cfg_t) != 1704);
+	BUILD_BUG_ON(offsetof(struct disp_frame_cfg_t, input_cfg) != 16);
+	BUILD_BUG_ON(offsetof(struct disp_frame_cfg_t, overlap_layer_num) != 1456);
+	BUILD_BUG_ON(offsetof(struct disp_frame_cfg_t, present_fence_idx) != 1676);
+	BUILD_BUG_ON(offsetof(struct disp_frame_cfg_t, tigger_mode) != 1696);
+
+	frame_cfg = kzalloc(sizeof(struct disp_frame_cfg_t), GFP_KERNEL);
 
 	if (frame_cfg == NULL) {
 		pr_err("error: kzalloc %zu memory fail!\n", sizeof(*frame_cfg));
@@ -1199,6 +1216,8 @@ int _ioctl_frame_config(unsigned long arg)
 		kfree(frame_cfg);
 		return -EFAULT;
 	}
+
+	/* Layout locked by the BUILD_BUG_ON block above. */
 
 	frame_cfg->setter = SESSION_USER_HWC;
 
@@ -1331,6 +1350,68 @@ int _ioctl_get_display_caps(unsigned long arg)
 	}
 
 	return ret;
+}
+
+/*
+ * The vendor HWC was built against a later MTK BSP whose query structs are
+ * larger, and the ioctl number encodes sizeof(): GET_DISPLAY_CAPS arrives as
+ * 0x40384FDA (56 vs 24 bytes), GET_SESSION_INFO as 0x40504FD0 (80 vs 72).
+ * Serve any caller that asks for at least the native struct: fill the head
+ * and zero the tail. This relies on the newer fields having been appended.
+ */
+static int _ioctl_widened(unsigned long arg, unsigned int user_size,
+			  size_t native_size, int (*handler)(unsigned long))
+{
+	void __user *argp = (void __user *)arg;
+
+	if (user_size < native_size) {
+		DISPERR("%s: caller asked for %u bytes, less than %zu\n",
+			__func__, user_size, native_size);
+		return -EINVAL;
+	}
+
+	if (user_size > native_size &&
+	    clear_user(argp + native_size, user_size - native_size)) {
+		DISPERR("%s: clear_user failed\n", __func__);
+		return -EFAULT;
+	}
+
+	return handler(arg);
+}
+
+/* Returns 0 when cmd is not one of the widened queries. */
+static int _ioctl_widened_dispatch(unsigned int cmd, unsigned long arg, int *ret)
+{
+	if (_IOC_TYPE(cmd) != _IOC_TYPE(DISP_IOCTL_GET_DISPLAY_CAPS))
+		return 0;
+
+	if (_IOC_NR(cmd) == _IOC_NR(DISP_IOCTL_GET_DISPLAY_CAPS) &&
+	    _IOC_SIZE(cmd) != _IOC_SIZE(DISP_IOCTL_GET_DISPLAY_CAPS)) {
+		*ret = _ioctl_widened(arg, _IOC_SIZE(cmd),
+				      sizeof(disp_caps_info),
+				      _ioctl_get_display_caps);
+		return 1;
+	}
+
+	if (_IOC_NR(cmd) == _IOC_NR(DISP_IOCTL_GET_SESSION_INFO) &&
+	    _IOC_SIZE(cmd) != _IOC_SIZE(DISP_IOCTL_GET_SESSION_INFO)) {
+		*ret = _ioctl_widened(arg, _IOC_SIZE(cmd),
+				      sizeof(disp_session_info),
+				      _ioctl_get_info);
+		return 1;
+	}
+
+	/* FRAME_CONFIG encodes sizeof(disp_session_output_config) while the
+	 * handler reads a disp_frame_cfg_t, so the size carries no meaning
+	 * (the HWC sends 0x40584FDC); match on the command number alone.
+	 */
+	if (_IOC_NR(cmd) == _IOC_NR(DISP_IOCTL_FRAME_CONFIG) &&
+	    _IOC_SIZE(cmd) != _IOC_SIZE(DISP_IOCTL_FRAME_CONFIG)) {
+		*ret = _ioctl_frame_config(arg);
+		return 1;
+	}
+
+	return 0;
 }
 
 int _ioctl_wait_vsync(unsigned long arg)
@@ -1508,6 +1589,10 @@ long mtk_disp_mgr_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 	/* DISPMSG("mtk_disp_mgr_ioctl, cmd=%s, arg=0x%08x\n", _session_ioctl_spy(cmd), arg); */
 
+	/* Queries whose struct grew in a later BSP - see _ioctl_widened(). */
+	if (_ioctl_widened_dispatch(cmd, arg, &ret))
+		return ret;
+
 	switch (cmd) {
 	case DISP_IOCTL_CREATE_SESSION:
 		{
@@ -1674,6 +1759,17 @@ static long mtk_disp_mgr_compat_ioctl(struct file *file, unsigned int cmd,  unsi
 {
 	long ret = -ENOIOCTLCMD;
 	/*DISPMSG("mtk_disp_mgr_compat_ioctl, cmd=%s, arg=0x%08lx\n", _session_compat_ioctl_spy(cmd), arg);*/
+
+	/* Same widened-struct case as the native path. The compat structs
+	 * match the native ones field for field, so the native handlers can
+	 * serve a 32-bit caller once the pointer is converted. */
+	{
+		int wret;
+
+		if (_ioctl_widened_dispatch(cmd, (unsigned long)compat_ptr(arg), &wret))
+			return wret;
+	}
+
 	switch (cmd) {
 	case COMPAT_DISP_IOCTL_CREATE_SESSION:
 		{

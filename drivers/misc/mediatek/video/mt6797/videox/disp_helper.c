@@ -327,7 +327,12 @@ void disp_helper_option_init(void)
 
 	/* ===================Begin: lowpower option setting==================== */
 	disp_helper_set_option(DISP_OPT_SODI_SUPPORT,			1);
-	disp_helper_set_option(DISP_OPT_IDLE_MGR,			1);
+	/* The idle manager switches to decouple mode and, with
+	 * DISP_OPT_IDLEMGR_DISABLE_ROUTINE_IRQ, masks RDMA0_DONE, which is the
+	 * vsync source for this video-mode panel. With no vsync no frame is
+	 * submitted to wake it up again, so keep it disabled.
+	 */
+	disp_helper_set_option(DISP_OPT_IDLE_MGR,			0);
 
 	/* 1. vdo mode + screen idle(need idlemgr) */
 	disp_helper_set_option(DISP_OPT_IDLEMGR_SWTCH_DECOUPLE,		1);

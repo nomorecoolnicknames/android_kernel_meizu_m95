@@ -898,7 +898,8 @@ disp_lcm_handle *disp_lcm_probe(char *plcm_name, LCM_INTERFACE_ID lcm_id, int is
 	disp_lcm_handle *plcm = NULL;
 
 	DISPFUNC();
-	DISPCHECK("plcm_name=%s is_lcm_inited %d\n", plcm_name, is_lcm_inited);
+	DISPCHECK("plcm_name=%s is_lcm_inited %d lcm_count=%d\n", plcm_name,
+		  is_lcm_inited, _lcm_count());
 
 #if defined(MTK_LCM_DEVICE_TREE_SUPPORT)
 	if (check_lcm_node_from_DT() == 0) {
@@ -986,6 +987,10 @@ disp_lcm_handle *disp_lcm_probe(char *plcm_name, LCM_INTERFACE_ID lcm_id, int is
 		return NULL;
 	}
 
+	DISPCHECK("lcm_drv=%s isLCMInited=%d lcmindex=%d\n",
+		  lcm_drv ? (lcm_drv->name ? lcm_drv->name : "?") : "NULL",
+		  isLCMInited, lcmindex);
+
 	plcm = kzalloc(sizeof(uint8_t *) * sizeof(disp_lcm_handle), GFP_KERNEL);
 	lcm_param = kzalloc(sizeof(uint8_t *) * sizeof(LCM_PARAMS), GFP_KERNEL);
 	if (plcm && lcm_param) {
@@ -1047,14 +1052,12 @@ int disp_lcm_init(disp_lcm_handle *plcm, int force)
 
 		if (lcm_drv->init_power) {
 			if (!disp_lcm_is_inited(plcm) || force) {
-				pr_debug("lcm init power()\n");
 				lcm_drv->init_power();
 			}
 		}
 
 		if (lcm_drv->init) {
 			if (!disp_lcm_is_inited(plcm) || force) {
-				pr_debug("lcm init()\n");
 				lcm_drv->init();
 			}
 		} else {
