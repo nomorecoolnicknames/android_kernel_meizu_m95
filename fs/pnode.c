@@ -403,3 +403,30 @@ int propagate_umount(struct hlist_head *list)
 		__propagate_umount(mnt);
 	return 0;
 }
+
+/*
+ * Remount of a mount with copy_mnt_data (sdcardfs): copy the new per-mount
+ * data to every mount that receives propagation from @mnt's parent, the way
+ * AOSP does since "ANDROID: mnt: Propagate remount correctly".
+ *
+ * The previous next_descendent() walker from "ANDROID: mnt: remount should
+ * propagate to slaves of slaves" spins forever on a mount whose mnt_master
+ * is NULL, as hit by the sdcard daemon remounting /data/media.
+ *
+ * vfsmount lock must be held for write (caller does lock_mount_hash()).
+ */
+void propagate_remount(struct mount *mnt)
+{
+	struct mount *parent = mnt->mnt_parent;
+	struct mount *p = mnt, *m;
+	struct super_block *sb = mnt->mnt.mnt_sb;
+
+	if (!sb->s_op->copy_mnt_data)
+		return;
+	for (p = propagation_next(parent, parent); p;
+				p = propagation_next(p, parent)) {
+		m = __lookup_mnt(&p->mnt, mnt->mnt_mountpoint);
+		if (m)
+			sb->s_op->copy_mnt_data(m->mnt.data, mnt->mnt.data);
+	}
+}
