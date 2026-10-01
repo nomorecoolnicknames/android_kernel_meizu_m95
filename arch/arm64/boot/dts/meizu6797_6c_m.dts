@@ -40,6 +40,36 @@
 		};
 	};
 
+	/* First-stage mount table. Init matches the wanted partitions against the
+	 * uevent PARTNAME, so dev paths must be by-name links: raw mmcblk0pN paths
+	 * never match and first-stage mount times out into a reboot.
+	 * custom (vendor) is 512 MiB, system is 2560 MiB.
+	 */
+	firmware {
+		android {
+			compatible = "android,firmware";
+			fstab {
+				compatible = "android,fstab";
+				system {
+					compatible = "android,system";
+					dev = "/dev/block/platform/mtk-msdc.0/11230000.msdc0/by-name/system";
+					type = "ext4";
+					mnt_flags = "ro,barrier=1";
+					fsmgr_flags = "wait";
+					status = "ok";
+				};
+				vendor {
+					compatible = "android,vendor";
+					dev = "/dev/block/platform/mtk-msdc.0/11230000.msdc0/by-name/custom";
+					type = "ext4";
+					mnt_flags = "ro,barrier=1";
+					fsmgr_flags = "wait";
+					status = "ok";
+				};
+			};
+		};
+	};
+
 
 	soc {
 		compatible = "simple-bus";
@@ -185,7 +215,9 @@
 		pwm_config = <0 0 0 0 0>;
 	};
 	led5:led@5 {
-		compatible = "mediatek,button-backlight";
+		/* Home button notification LED (ISINK, mode 3), named as in the stock DTB;
+		 * lights.mt6797.so writes /sys/class/leds/mx-led. */
+		compatible = "mediatek,mx-led";
 		led_mode = <3>;
 		data = <1>;
 		pwm_config = <0 0 0 0 0>;
@@ -556,7 +588,8 @@
 /* TOUCH end */
 &accdet {
 		accdet-mic-vol = <7>;
-		headset-mode-setting = <0x500 0x500 1 0x1F0 0x800 0x800 0x20>;
+		/* Matches the stock DTB. */
+		headset-mode-setting = <0x500 0x500 1 0x1F0 0x400 0x800 0x20>;
 		accdet-plugout-debounce = <1>;
 		/*1:ACC mode, 2:low cost without in bias, 6:low cost with in bias*/
 		accdet-mic-mode = <1>;

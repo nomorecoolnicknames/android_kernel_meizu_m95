@@ -72,9 +72,12 @@ all:	$(KBUILD_IMAGE) $(KBUILD_DTBS)
 MTK_PLATFORM := $(CONFIG_MTK_PLATFORM:"%"=%)
 MTK_PROJECT := $(CONFIG_ARCH_MTK_PROJECT:"%"=%)
 export MTK_PLATFORM MTK_PROJECT MTK_TARGET_PROJECT
+# The flattened MX6 tree contains the generated board data directly.
+ifneq ($(CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE_NAMES),"meizu6797_6c_m_flat")
 -include $(srctree)/scripts/drvgen/drvgen.mk
 archprepare: $(DRVGEN_FILE_LIST)
 dtbs: $(DRVGEN_FILE_LIST)
+endif
 
 boot := arch/arm64/boot
 
