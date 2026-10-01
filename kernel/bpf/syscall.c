@@ -19,6 +19,12 @@
 
 static LIST_HEAD(bpf_map_types);
 
+/* 4.4 semantics instead of a blanket root-only check: only BPF_PROG_LOAD of
+ * non-socket-filter programs needs CAP_SYS_ADMIN, the rest is gated by
+ * /proc/sys/kernel/unprivileged_bpf_disabled. netd and gpuservice use the
+ * pinned objects without CAP_SYS_ADMIN. */
+int sysctl_unprivileged_bpf_disabled __read_mostly;
+
 static struct bpf_map *find_and_alloc_map(union bpf_attr *attr)
 {
 	struct bpf_map_type_list *tl;
@@ -71,7 +77,17 @@ static int bpf_map_release(struct inode *inode, struct file *filp)
 	return 0;
 }
 
-static const struct file_operations bpf_map_fops = {
+/* Opening a pinned object through bpffs hands out the same kind of fd that
+ * BPF_MAP_CREATE returns, since i_fop of the pinned inode is bpf_map_fops.
+ * Android userspace opens /sys/fs/bpf/<object> directly. */
+static int bpf_map_open(struct inode *inode, struct file *filp)
+{
+	filp->private_data = bpf_map_inc(inode->i_private, true);
+	return 0;
+}
+
+const struct file_operations bpf_map_fops = {
+	.open    = bpf_map_open,
 	.release = bpf_map_release,
 };
 
@@ -83,7 +99,10 @@ static const struct file_operations bpf_map_fops = {
 		   offsetof(union bpf_attr, CMD##_LAST_FIELD) - \
 		   sizeof(attr->CMD##_LAST_FIELD)) != NULL
 
-#define BPF_MAP_CREATE_LAST_FIELD max_entries
+/* The LAST_FIELD markers follow the newer union bpf_attr layout declared in
+ * include/uapi/linux/bpf.h: Android userspace fills map_flags, prog_flags and
+ * btf_*, which this kernel ignores but must not reject. */
+#define BPF_MAP_CREATE_LAST_FIELD btf_value_type_id
 /* called via syscall */
 static int map_create(union bpf_attr *attr)
 {
@@ -134,6 +153,65 @@ struct bpf_map *bpf_map_get(struct fd f)
 	return map;
 }
 
+/* Convert BPF_F_RDONLY/BPF_F_WRONLY to open flags (from 4.9). */
+int bpf_get_file_flag(int flags)
+{
+	if ((flags & BPF_F_RDONLY) && (flags & BPF_F_WRONLY))
+		return -EINVAL;
+	if (flags & BPF_F_RDONLY)
+		return O_RDONLY;
+	if (flags & BPF_F_WRONLY)
+		return O_WRONLY;
+	return O_RDWR;
+}
+
+/* Reference counting helpers shared with the bpf filesystem (bpffs). */
+struct bpf_map *bpf_map_inc(struct bpf_map *map, bool uref)
+{
+	atomic_inc(&map->refcnt);
+	return map;
+}
+
+void bpf_map_put_with_uref(struct bpf_map *map)
+{
+	bpf_map_put(map);
+}
+
+struct bpf_map *bpf_map_get_with_uref(u32 ufd)
+{
+	struct fd f = fdget(ufd);
+	struct bpf_map *map;
+
+	map = bpf_map_get(f);
+	if (IS_ERR(map))
+		return map;
+
+	/* The caller (BPF_OBJ_PIN) keeps this reference: the pinned dentry
+	 * owns it until evict/unlink puts it back, so the map outlives the
+	 * creator's fds. Matches upstream 4.9. */
+	bpf_map_inc(map, true);
+	fdput(f);
+	return map;
+}
+
+int bpf_map_new_fd(struct bpf_map *map)
+{
+	return anon_inode_getfd("bpf-map", &bpf_map_fops, map,
+				O_RDWR | O_CLOEXEC);
+}
+
+struct bpf_prog *bpf_prog_inc(struct bpf_prog *prog)
+{
+	atomic_inc(&prog->aux->refcnt);
+	return prog;
+}
+
+int bpf_prog_new_fd(struct bpf_prog *prog)
+{
+	return anon_inode_getfd("bpf-prog", &bpf_prog_fops, prog,
+				O_RDWR | O_CLOEXEC);
+}
+
 /* helper to convert user pointers passed inside __aligned_u64 fields */
 static void __user *u64_to_ptr(__u64 val)
 {
@@ -141,7 +219,7 @@ static void __user *u64_to_ptr(__u64 val)
 }
 
 /* last field in 'union bpf_attr' used by this command */
-#define BPF_MAP_LOOKUP_ELEM_LAST_FIELD value
+#define BPF_MAP_LOOKUP_ELEM_LAST_FIELD flags
 
 static int map_lookup_elem(union bpf_attr *attr)
 {
@@ -171,7 +249,14 @@ static int map_lookup_elem(union bpf_attr *attr)
 
 	err = -ESRCH;
 	rcu_read_lock();
-	value = map->ops->map_lookup_elem(map, key);
+	/* A per-CPU map stores one value per CPU in a single block of
+	 * map->value_size bytes: the syscall layer reads the whole block, a
+	 * program only the current CPU's slice, so those map types provide a
+	 * syscall-only variant. */
+	if (map->ops->map_lookup_elem_sys_only)
+		value = map->ops->map_lookup_elem_sys_only(map, key);
+	else
+		value = map->ops->map_lookup_elem(map, key);
 	if (!value)
 		goto err_unlock;
 
@@ -190,7 +275,7 @@ err_put:
 	return err;
 }
 
-#define BPF_MAP_UPDATE_ELEM_LAST_FIELD value
+#define BPF_MAP_UPDATE_ELEM_LAST_FIELD flags
 
 static int map_update_elem(union bpf_attr *attr)
 {
@@ -231,7 +316,12 @@ static int map_update_elem(union bpf_attr *attr)
 	 * therefore all map accessors rely on this fact, so do the same here
 	 */
 	rcu_read_lock();
-	err = map->ops->map_update_elem(map, key, value);
+	/* userspace writes the whole per-CPU block, see map_lookup_elem() */
+	if (map->ops->map_update_elem_sys_only)
+		err = map->ops->map_update_elem_sys_only(map, key, value,
+							 attr->flags);
+	else
+		err = map->ops->map_update_elem(map, key, value, attr->flags);
 	rcu_read_unlock();
 
 free_value:
@@ -243,7 +333,7 @@ err_put:
 	return err;
 }
 
-#define BPF_MAP_DELETE_ELEM_LAST_FIELD key
+#define BPF_MAP_DELETE_ELEM_LAST_FIELD flags
 
 static int map_delete_elem(union bpf_attr *attr)
 {
@@ -282,7 +372,7 @@ err_put:
 }
 
 /* last field in 'union bpf_attr' used by this command */
-#define BPF_MAP_GET_NEXT_KEY_LAST_FIELD next_key
+#define BPF_MAP_GET_NEXT_KEY_LAST_FIELD flags
 
 static int map_get_next_key(union bpf_attr *attr)
 {
@@ -410,6 +500,16 @@ void bpf_prog_put(struct bpf_prog *prog)
 	}
 }
 
+/* Same as bpf_prog_put(), used by the prog_array fd-array map whose elements are
+ * dropped from an xchg()ed slot that RCU readers may still hold. */
+void bpf_prog_put_rcu(struct bpf_prog *prog)
+{
+	if (atomic_dec_and_test(&prog->aux->refcnt)) {
+		free_used_maps(prog->aux);
+		bpf_prog_free(prog);
+	}
+}
+
 static int bpf_prog_release(struct inode *inode, struct file *filp)
 {
 	struct bpf_prog *prog = filp->private_data;
@@ -418,8 +518,15 @@ static int bpf_prog_release(struct inode *inode, struct file *filp)
 	return 0;
 }
 
-static const struct file_operations bpf_prog_fops = {
-        .release = bpf_prog_release,
+static int bpf_prog_open(struct inode *inode, struct file *filp)
+{
+	filp->private_data = bpf_prog_inc(inode->i_private);
+	return 0;
+}
+
+const struct file_operations bpf_prog_fops = {
+	.open    = bpf_prog_open,
+	.release = bpf_prog_release,
 };
 
 static struct bpf_prog *get_prog(struct fd f)
@@ -458,7 +565,7 @@ struct bpf_prog *bpf_prog_get(u32 ufd)
 }
 
 /* last field in 'union bpf_attr' used by this command */
-#define	BPF_PROG_LOAD_LAST_FIELD log_buf
+#define	BPF_PROG_LOAD_LAST_FIELD expected_attach_type
 
 static int bpf_prog_load(union bpf_attr *attr)
 {
@@ -470,6 +577,11 @@ static int bpf_prog_load(union bpf_attr *attr)
 
 	if (CHECK_ATTR(BPF_PROG_LOAD))
 		return -EINVAL;
+
+
+	/* 4.4 semantics: loading anything but a socket filter is privileged. */
+	if (type != BPF_PROG_TYPE_SOCKET_FILTER && !capable(CAP_SYS_ADMIN))
+		return -EPERM;
 
 	/* copy eBPF program license from user space */
 	if (strncpy_from_user(license, u64_to_ptr(attr->license),
@@ -533,16 +645,94 @@ free_prog:
 	return err;
 }
 
+#define BPF_OBJ_PIN_LAST_FIELD file_flags
+static int bpf_obj_pin(const union bpf_attr *attr)
+{
+	if (CHECK_ATTR(BPF_OBJ_PIN))
+		return -EINVAL;
+
+	return bpf_obj_pin_user(attr->bpf_fd, u64_to_ptr(attr->pathname));
+}
+
+#define BPF_OBJ_GET_LAST_FIELD file_flags
+static int bpf_obj_get(const union bpf_attr *attr)
+{
+	if (CHECK_ATTR(BPF_OBJ_GET))
+		return -EINVAL;
+
+	return bpf_obj_get_user(u64_to_ptr(attr->pathname), attr->file_flags);
+}
+
+/* Minimal BPF_PROG_ATTACH/DETACH: netd attaches its cgroup programs at
+ * startup and fails without it. Only cgroup directory fds are accepted; the
+ * programs are stored on the cgroup and never executed, see
+ * kernel/bpf/cgroup_stub.c. */
+#define BPF_PROG_ATTACH_LAST_FIELD attach_flags
+
+static int bpf_prog_attach(const union bpf_attr *attr)
+{
+	struct bpf_prog *prog;
+	struct cgroup *cgrp;
+	int ret;
+
+	if (CHECK_ATTR(BPF_PROG_ATTACH))
+		return -EINVAL;
+
+	if (attr->attach_type >= __MAX_BPF_ATTACH_TYPE)
+		return -EINVAL;
+
+	if (attr->attach_flags & ~(BPF_F_ALLOW_OVERRIDE | BPF_F_ALLOW_MULTI))
+		return -EINVAL;
+
+	/* bpf_prog_get() holds a reference, which becomes the stored one. */
+	prog = bpf_prog_get(attr->attach_bpf_fd);
+	if (IS_ERR(prog))
+		return PTR_ERR(prog);
+
+	cgrp = bpf_cgroup_from_fd(attr->target_fd);
+	if (IS_ERR(cgrp)) {
+		bpf_prog_put(prog);
+		return PTR_ERR(cgrp);
+	}
+
+	ret = bpf_cgroup_attach_stub(cgrp, prog, attr->attach_type,
+				     attr->attach_flags);
+	if (ret)
+		bpf_prog_put(prog);
+	bpf_cgroup_from_fd_put(cgrp);
+	return ret;
+}
+
+#define BPF_PROG_DETACH_LAST_FIELD attach_type
+
+static int bpf_prog_detach(const union bpf_attr *attr)
+{
+	struct cgroup *cgrp;
+	int ret;
+
+	if (CHECK_ATTR(BPF_PROG_DETACH))
+		return -EINVAL;
+
+	if (attr->attach_type >= __MAX_BPF_ATTACH_TYPE)
+		return -EINVAL;
+
+	cgrp = bpf_cgroup_from_fd(attr->target_fd);
+	if (IS_ERR(cgrp))
+		return PTR_ERR(cgrp);
+
+	ret = bpf_cgroup_detach_stub(cgrp, attr->attach_type);
+	bpf_cgroup_from_fd_put(cgrp);
+	return ret;
+}
+
 SYSCALL_DEFINE3(bpf, int, cmd, union bpf_attr __user *, uattr, unsigned int, size)
 {
 	union bpf_attr attr = {};
 	int err;
 
-	/* the syscall is limited to root temporarily. This restriction will be
-	 * lifted when security audit is clean. Note that eBPF+tracing must have
-	 * this restriction, since it may pass kernel data to user space
-	 */
-	if (!capable(CAP_SYS_ADMIN))
+	/* 4.4 semantics: unprivileged use is allowed unless the sysctl says
+	 * otherwise; program loading keeps its own CAP_SYS_ADMIN check above. */
+	if (!capable(CAP_SYS_ADMIN) && sysctl_unprivileged_bpf_disabled)
 		return -EPERM;
 
 	if (!access_ok(VERIFY_READ, uattr, 1))
@@ -551,10 +741,11 @@ SYSCALL_DEFINE3(bpf, int, cmd, union bpf_attr __user *, uattr, unsigned int, siz
 	if (size > PAGE_SIZE)	/* silly large */
 		return -E2BIG;
 
-	/* If we're handed a bigger struct than we know of,
-	 * ensure all the unknown bits are 0 - i.e. new
-	 * user-space does not rely on any kernel feature
-	 * extensions we dont know about yet.
+	/* Upstream rejects a bigger-than-known struct unless every unknown
+	 * byte is zero. Here unknown tail bytes are only logged: Android
+	 * userspace sets fields this kernel does not implement (BTF,
+	 * func_info, attach_btf_id, ...). CHECK_ATTR still guards the
+	 * known fields.
 	 */
 	if (size > sizeof(attr)) {
 		unsigned char __user *addr;
@@ -569,7 +760,8 @@ SYSCALL_DEFINE3(bpf, int, cmd, union bpf_attr __user *, uattr, unsigned int, siz
 			if (err)
 				return err;
 			if (val)
-				return -E2BIG;
+				pr_warn_once("bpf: cmd %d ignoring nonzero tail byte at +%tu\n",
+					     cmd, addr - (unsigned char __user *)uattr);
 		}
 		size = sizeof(attr);
 	}
@@ -596,6 +788,18 @@ SYSCALL_DEFINE3(bpf, int, cmd, union bpf_attr __user *, uattr, unsigned int, siz
 		break;
 	case BPF_PROG_LOAD:
 		err = bpf_prog_load(&attr);
+		break;
+	case BPF_OBJ_PIN:
+		err = bpf_obj_pin(&attr);
+		break;
+	case BPF_OBJ_GET:
+		err = bpf_obj_get(&attr);
+		break;
+	case BPF_PROG_ATTACH:
+		err = bpf_prog_attach(&attr);
+		break;
+	case BPF_PROG_DETACH:
+		err = bpf_prog_detach(&attr);
 		break;
 	default:
 		err = -EINVAL;

@@ -17,6 +17,8 @@
 #define HUGETLBFS_MAGIC 	0x958458f6	/* some random number */
 #define SQUASHFS_MAGIC		0x73717368
 #define ECRYPTFS_SUPER_MAGIC	0xf15f
+/* sdcardfs, value from AOSP include/uapi/linux/magic.h */
+#define SDCARDFS_SUPER_MAGIC	0x5dca2df5
 #define EFS_SUPER_MAGIC		0x414A53
 #define EXT2_SUPER_MAGIC	0xEF53
 #define EXT3_SUPER_MAGIC	0xEF53
@@ -72,5 +74,9 @@
 #define MTD_INODE_FS_MAGIC      0x11307854
 #define ANON_INODE_FS_MAGIC	0x09041934
 #define BTRFS_TEST_MAGIC	0x73727279
+
+/* bpf filesystem. ABI: Android userspace statfs()es /sys/fs/bpf and
+ * requires exactly this magic. */
+#define BPF_FS_MAGIC		0xcafe4a11
 
 #endif /* __LINUX_MAGIC_H__ */

@@ -1,0 +1,425 @@
+/*
+ * Minimal file system backend for holding eBPF maps and programs,
+ * used by bpf(2) object pinning.
+ *
+ * Authors:
+ *
+ *	Daniel Borkmann <daniel@iogearbox.net>
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * version 2 as published by the Free Software Foundation.
+ *
+ * Backported from Linux 4.4. Android userspace pins its maps and programs
+ * under /sys/fs/bpf (bpfloader, gpuservice, netd) and statfs()es the path
+ * for BPF_FS_MAGIC.
+ *
+ * Changes for 3.18:
+ *   - kern_path_create() takes a string here, not a struct filename;
+ *   - d_backing_inode() does not exist yet, d_inode() is used instead;
+ *   - sysfs_create_mount_point() (3.19) is absent, so the mount point is
+ *     created by the vendor init.rc together with the mount itself:
+ *         mkdir /sys/fs/bpf 0770 root system
+ *         mount bpf bpf /sys/fs/bpf
+ *   - the pinned inodes carry bpf_map_fops / bpf_prog_fops (exported from
+ *     syscall.c) so that open() on a pinned object yields a usable bpf fd,
+ *     which is what Android's libbpf does instead of BPF_OBJ_GET.
+ */
+
+#include <linux/module.h>
+#include <linux/magic.h>
+#include <linux/major.h>
+#include <linux/mount.h>
+#include <linux/namei.h>
+#include <linux/fs.h>
+#include <linux/kdev_t.h>
+#include <linux/filter.h>
+#include <linux/bpf.h>
+
+enum bpf_type {
+	BPF_TYPE_UNSPEC	= 0,
+	BPF_TYPE_PROG,
+	BPF_TYPE_MAP,
+};
+
+static void *bpf_any_get(void *raw, enum bpf_type type)
+{
+	switch (type) {
+	case BPF_TYPE_PROG:
+		raw = bpf_prog_inc(raw);
+		break;
+	case BPF_TYPE_MAP:
+		raw = bpf_map_inc(raw, true);
+		break;
+	default:
+		WARN_ON_ONCE(1);
+		break;
+	}
+
+	return raw;
+}
+
+static void bpf_any_put(void *raw, enum bpf_type type)
+{
+	switch (type) {
+	case BPF_TYPE_PROG:
+		bpf_prog_put(raw);
+		break;
+	case BPF_TYPE_MAP:
+		bpf_map_put_with_uref(raw);
+		break;
+	default:
+		WARN_ON_ONCE(1);
+		break;
+	}
+}
+
+static void *bpf_fd_probe_obj(u32 ufd, enum bpf_type *type)
+{
+	void *raw;
+
+	*type = BPF_TYPE_MAP;
+	raw = bpf_map_get_with_uref(ufd);
+	if (IS_ERR(raw)) {
+		*type = BPF_TYPE_PROG;
+		raw = bpf_prog_get(ufd);
+	}
+
+	return raw;
+}
+
+static const struct inode_operations bpf_dir_iops;
+
+static const struct inode_operations bpf_prog_iops = { };
+static const struct inode_operations bpf_map_iops  = { };
+
+static struct inode *bpf_get_inode(struct super_block *sb,
+				   const struct inode *dir,
+				   umode_t mode)
+{
+	struct inode *inode;
+
+	switch (mode & S_IFMT) {
+	case S_IFDIR:
+	case S_IFREG:
+		break;
+	default:
+		return ERR_PTR(-EINVAL);
+	}
+
+	inode = new_inode(sb);
+	if (!inode)
+		return ERR_PTR(-ENOSPC);
+
+	inode->i_ino = get_next_ino();
+	inode->i_atime = CURRENT_TIME;
+	inode->i_mtime = inode->i_atime;
+	inode->i_ctime = inode->i_atime;
+
+	inode_init_owner(inode, dir, mode);
+
+	return inode;
+}
+
+static int bpf_inode_type(const struct inode *inode, enum bpf_type *type)
+{
+	*type = BPF_TYPE_UNSPEC;
+	if (inode->i_op == &bpf_prog_iops)
+		*type = BPF_TYPE_PROG;
+	else if (inode->i_op == &bpf_map_iops)
+		*type = BPF_TYPE_MAP;
+	else
+		return -EACCES;
+
+	return 0;
+}
+
+static bool bpf_dname_reserved(const struct dentry *dentry)
+{
+	return strchr(dentry->d_name.name, '.');
+}
+
+static int bpf_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
+{
+	struct inode *inode;
+
+	if (bpf_dname_reserved(dentry))
+		return -EPERM;
+
+	inode = bpf_get_inode(dir->i_sb, dir, mode | S_IFDIR);
+	if (IS_ERR(inode))
+		return PTR_ERR(inode);
+
+	inode->i_op = &bpf_dir_iops;
+	inode->i_fop = &simple_dir_operations;
+
+	inc_nlink(inode);
+	inc_nlink(dir);
+
+	d_instantiate(dentry, inode);
+	dget(dentry);
+
+	return 0;
+}
+
+static int bpf_mkobj_ops(struct inode *dir, struct dentry *dentry,
+			 umode_t mode, const struct inode_operations *iops,
+			 const struct file_operations *fops)
+{
+	struct inode *inode;
+
+	if (bpf_dname_reserved(dentry))
+		return -EPERM;
+
+	inode = bpf_get_inode(dir->i_sb, dir, mode | S_IFREG);
+	if (IS_ERR(inode))
+		return PTR_ERR(inode);
+
+	inode->i_op = iops;
+	inode->i_fop = fops;
+	inode->i_private = dentry->d_fsdata;
+
+	d_instantiate(dentry, inode);
+	dget(dentry);
+
+	return 0;
+}
+
+static int bpf_mkobj(struct inode *dir, struct dentry *dentry, umode_t mode,
+		     dev_t devt)
+{
+	enum bpf_type type = MINOR(devt);
+
+	if (MAJOR(devt) != UNNAMED_MAJOR || !S_ISREG(mode) ||
+	    dentry->d_fsdata == NULL)
+		return -EPERM;
+
+	switch (type) {
+	case BPF_TYPE_PROG:
+		return bpf_mkobj_ops(dir, dentry, mode, &bpf_prog_iops,
+				     &bpf_prog_fops);
+	case BPF_TYPE_MAP:
+		return bpf_mkobj_ops(dir, dentry, mode, &bpf_map_iops,
+				     &bpf_map_fops);
+	default:
+		return -EPERM;
+	}
+}
+
+static const struct inode_operations bpf_dir_iops = {
+	.lookup		= simple_lookup,
+	.mknod		= bpf_mkobj,
+	.mkdir		= bpf_mkdir,
+	.rmdir		= simple_rmdir,
+	.unlink		= simple_unlink,
+	/* bpfloader pins every map under a tmp_ name and rename()s it into
+	 * place; without this the VFS answers -EPERM. */
+	.rename		= simple_rename,
+};
+
+static int bpf_obj_do_pin(const char *pathname, void *raw, enum bpf_type type)
+{
+	struct dentry *dentry;
+	struct inode *dir;
+	struct path path;
+	umode_t mode;
+	dev_t devt;
+	int ret;
+
+	dentry = kern_path_create(AT_FDCWD, pathname, &path, 0);
+	if (IS_ERR(dentry))
+		return PTR_ERR(dentry);
+
+	mode = S_IFREG | ((S_IRUSR | S_IWUSR) & ~current_umask());
+	devt = MKDEV(UNNAMED_MAJOR, type);
+
+	/* 3.18 only declares this hook when CONFIG_SECURITY_PATH is on, and this
+	 * tree builds without it - vfs_mknod() then performs the same checks. */
+#ifdef CONFIG_SECURITY_PATH
+	ret = security_path_mknod(&path, dentry, mode, devt);
+	if (ret)
+		goto out;
+#endif
+
+	dir = path.dentry->d_inode;
+	if (dir->i_op != &bpf_dir_iops) {
+		ret = -EPERM;
+		goto out;
+	}
+
+	dentry->d_fsdata = raw;
+	ret = vfs_mknod(dir, dentry, mode, devt);
+	dentry->d_fsdata = NULL;
+out:
+	done_path_create(&path, dentry);
+	return ret;
+}
+
+int bpf_obj_pin_user(u32 ufd, const char __user *pathname)
+{
+	struct filename *pname;
+	enum bpf_type type;
+	void *raw;
+	int ret;
+
+	pname = getname(pathname);
+	if (IS_ERR(pname))
+		return PTR_ERR(pname);
+
+	raw = bpf_fd_probe_obj(ufd, &type);
+	if (IS_ERR(raw)) {
+		ret = PTR_ERR(raw);
+		goto out;
+	}
+
+	ret = bpf_obj_do_pin(pname->name, raw, type);
+	if (ret != 0)
+		bpf_any_put(raw, type);
+out:
+	putname(pname);
+	return ret;
+}
+
+static void *bpf_obj_do_get(const char *pathname, enum bpf_type *type,
+			    int flags)
+{
+	struct inode *inode;
+	struct path path;
+	void *raw;
+	int ret;
+
+	ret = kern_path(pathname, LOOKUP_FOLLOW, &path);
+	if (ret)
+		return ERR_PTR(ret);
+
+	inode = path.dentry->d_inode;
+	/* 4.9 checks ACC_MODE(flags), not blanket MAY_WRITE: pinned objects
+	 * are typically 0440, and readers (e.g. gpuservice on root:graphics
+	 * programs) only have MAY_READ. */
+	ret = inode_permission(inode, ACC_MODE(flags));
+	if (ret)
+		goto out;
+
+	ret = bpf_inode_type(inode, type);
+	if (ret)
+		goto out;
+
+	raw = bpf_any_get(inode->i_private, *type);
+	if (!IS_ERR(raw))
+		touch_atime(&path);
+
+	path_put(&path);
+	return raw;
+out:
+	path_put(&path);
+	return ERR_PTR(ret);
+}
+
+int bpf_obj_get_user(const char __user *pathname, int flags)
+{
+	enum bpf_type type = BPF_TYPE_UNSPEC;
+	struct filename *pname;
+	int f_flags;
+	int ret = -ENOENT;
+	void *raw;
+
+	f_flags = bpf_get_file_flag(flags);
+	if (f_flags < 0)
+		return f_flags;
+
+	pname = getname(pathname);
+	if (IS_ERR(pname))
+		return PTR_ERR(pname);
+
+	raw = bpf_obj_do_get(pname->name, &type, f_flags);
+	if (IS_ERR(raw)) {
+		ret = PTR_ERR(raw);
+		goto out;
+	}
+
+	if (type == BPF_TYPE_PROG)
+		ret = bpf_prog_new_fd(raw);
+	else if (type == BPF_TYPE_MAP)
+		ret = bpf_map_new_fd(raw);
+	else
+		goto out;
+
+	if (ret < 0)
+		bpf_any_put(raw, type);
+out:
+	putname(pname);
+	return ret;
+}
+
+static void bpf_evict_inode(struct inode *inode)
+{
+	enum bpf_type type;
+
+	truncate_inode_pages_final(&inode->i_data);
+	clear_inode(inode);
+
+	if (!bpf_inode_type(inode, &type))
+		bpf_any_put(inode->i_private, type);
+}
+
+static const struct super_operations bpf_super_ops = {
+	.statfs		= simple_statfs,
+	.drop_inode	= generic_delete_inode,
+	.evict_inode	= bpf_evict_inode,
+};
+
+static int bpf_fill_super(struct super_block *sb, void *data, int silent)
+{
+	static struct tree_descr bpf_rfiles[] = { { "" } };
+	struct inode *inode;
+	int ret;
+
+	ret = simple_fill_super(sb, BPF_FS_MAGIC, bpf_rfiles);
+	if (ret)
+		return ret;
+
+	sb->s_op = &bpf_super_ops;
+
+	inode = sb->s_root->d_inode;
+	inode->i_op = &bpf_dir_iops;
+	inode->i_mode &= ~S_IALLUGO;
+	inode->i_mode |= S_ISVTX | S_IRWXUGO;
+
+	return 0;
+}
+
+static struct dentry *bpf_mount(struct file_system_type *type, int flags,
+				const char *dev_name, void *data)
+{
+	return mount_nodev(type, flags, data, bpf_fill_super);
+}
+
+static struct file_system_type bpf_fs_type = {
+	.owner		= THIS_MODULE,
+	.name		= "bpf",
+	.mount		= bpf_mount,
+	.kill_sb	= kill_litter_super,
+};
+
+MODULE_ALIAS_FS("bpf");
+
+/* Upstream creates the /sys/fs/bpf mount point with sysfs_create_mount_point()
+ * (3.19); neither that nor kernfs_create_empty_dir() exists in 3.18, so use
+ * the plain sysfs API. init mounts bpffs there without creating it first. */
+static struct kobject *bpf_kobj;
+
+static int __init bpf_init(void)
+{
+	int ret;
+
+	bpf_kobj = kobject_create_and_add("bpf", fs_kobj);
+	if (!bpf_kobj)
+		return -ENOMEM;
+
+	ret = register_filesystem(&bpf_fs_type);
+	if (ret)
+		kobject_put(bpf_kobj);
+
+	return ret;
+}
+fs_initcall(bpf_init);
