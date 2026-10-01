@@ -8,6 +8,7 @@
 #include <linux/delay.h>
 #include <linux/uaccess.h>
 #include <linux/fs.h>
+#include <linux/module.h>
 
 #include "lens_info.h"
 
@@ -195,6 +196,72 @@ static inline int setAFMacro(unsigned long a_u4Position)
 	return 0;
 }
 
+/*
+ * AFIOC_S_SETPARA, sent by the 3A HAL during an AF scan; failing it leaves AF
+ * stuck in ACTIVE_UNFOCUSED. As in BU63165AF.c the only CmdID acted on there
+ * is OIS mode, and AK7371 has no OIS, so just log the request and succeed.
+ */
+static inline int setAFPara(__user stAF_MotorCmd * pstMotorCmd)
+{
+	stAF_MotorCmd stMotorCmd;
+
+	if (copy_from_user(&stMotorCmd, pstMotorCmd, sizeof(stMotorCmd)))
+		LOG_INF("copy from user failed when getting motor command\n");
+
+	LOG_INF("Motor CmdID : %x, Param : %x\n", stMotorCmd.u4CmdID, stMotorCmd.u4Param);
+
+	return 0;
+}
+
+/*
+ * Debug knob: move the actuator directly with moveAF().
+ *
+ *   echo 600 > /sys/module/AK7371AF/parameters/dbg_move
+ *   cat      /sys/module/AK7371AF/parameters/dbg_move
+ *
+ * The I2C client is only bound once the camera HAL has opened /dev/MAINAF
+ * and selected this motor, so start the camera first.
+ */
+static int af_dbg_move_set(const char *val, const struct kernel_param *kp)
+{
+	unsigned long pos;
+	int ret;
+
+	if (!g_pstAF_I2Cclient || !g_pAF_SpinLock || !g_pAF_Opened) {
+		pr_info(AF_DRVNAME " [dbg_move] not bound yet - start the camera first\n");
+		return -ENODEV;
+	}
+
+	ret = kstrtoul(val, 0, &pos);
+	if (ret)
+		return ret;
+
+	pr_info(AF_DRVNAME " [dbg_move] request %lu (curr %lu inf %lu macro %lu opened %d)\n",
+		pos, g_u4CurrPosition, g_u4AF_INF, g_u4AF_MACRO, *g_pAF_Opened);
+
+	ret = moveAF(pos);
+
+	pr_info(AF_DRVNAME " [dbg_move] moveAF returned %d, curr now %lu\n",
+		ret, g_u4CurrPosition);
+
+	return ret;
+}
+
+static int af_dbg_move_get(char *buf, const struct kernel_param *kp)
+{
+	return scnprintf(buf, PAGE_SIZE,
+			 "curr %lu target %lu inf %lu macro %lu opened %d\n",
+			 g_u4CurrPosition, g_u4TargetPosition,
+			 g_u4AF_INF, g_u4AF_MACRO,
+			 g_pAF_Opened ? *g_pAF_Opened : -1);
+}
+
+static struct kernel_param_ops af_dbg_move_ops = {
+	.set = af_dbg_move_set,
+	.get = af_dbg_move_get,
+};
+module_param_cb(dbg_move, &af_dbg_move_ops, NULL, 0644);
+
 /* ////////////////////////////////////////////////////////////// */
 long AK7371AF_Ioctl(struct file *a_pstFile, unsigned int a_u4Command, unsigned long a_u4Param)
 {
@@ -215,6 +282,10 @@ long AK7371AF_Ioctl(struct file *a_pstFile, unsigned int a_u4Command, unsigned l
 
 	case AFIOC_T_SETMACROPOS:
 		i4RetValue = setAFMacro(a_u4Param);
+		break;
+
+	case AFIOC_S_SETPARA:
+		i4RetValue = setAFPara((__user stAF_MotorCmd *) (a_u4Param));
 		break;
 
 	default:
