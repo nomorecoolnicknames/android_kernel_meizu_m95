@@ -94,7 +94,9 @@ char *leds_name[MT65XX_LED_TYPE_TOTAL] = {
 	"blue",
 	"jogball-backlight",
 	"keyboard-backlight",
-	"button-backlight",
+	/* Home button LED (DT "mediatek,mx-led"), driven by lights.mt6797.so
+	 * through /sys/class/leds/mx-led. */
+	"mx-led",
 	"lcd-backlight",
 };
 
