@@ -537,10 +537,18 @@ static void gic_smp_init(void)
 static int gic_set_affinity(struct irq_data *d, const struct cpumask *mask_val,
 			    bool force)
 {
-	unsigned int cpu = cpumask_any_and(mask_val, cpu_online_mask);
+	unsigned int cpu;
 	void __iomem *reg;
 	int enabled;
 	u64 val;
+
+	/* Forced hotplug affinity may target a CPU before it is online. */
+	if (force)
+		cpu = cpumask_first_and(mask_val, cpu_possible_mask);
+	else
+		cpu = cpumask_any_and(mask_val, cpu_online_mask);
+	if (cpu >= nr_cpu_ids)
+		return -EINVAL;
 
 #ifndef CONFIG_MTK_IRQ_NEW_DESIGN
 	if (gic_irq_in_rdist(d))
@@ -573,13 +581,6 @@ static int gic_set_affinity(struct irq_data *d, const struct cpumask *mask_val,
 	 */
 	if (cpumask_equal(d->affinity, mask_val))
 		return IRQ_SET_MASK_OK_NOCOPY;
-
-	/*
-	 * cpumask_first_and() returns >= nr_cpu_ids when the intersection
-	 * of inputs is an empty set -> return error when this is not a "forced" update
-	 */
-	if (!force && (cpumask_first_and(mask_val, cpu_online_mask) >= nr_cpu_ids))
-		return -EINVAL;
 
 	if (gic_irq_in_rdist(d))
 		return -EINVAL;
