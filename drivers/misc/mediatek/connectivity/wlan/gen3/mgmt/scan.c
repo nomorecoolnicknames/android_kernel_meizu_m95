@@ -3856,6 +3856,19 @@ try_again:
 	LINK_FOR_EACH_ENTRY(prBssDesc, prEssLink, rLinkEntryEss, BSS_DESC_T) {
 		if (prConnSettings->eConnectionPolicy == CONNECT_BY_BSSID &&
 			EQUAL_MAC_ADDR(prBssDesc->aucBSSID, prConnSettings->aucBSSID)) {
+			/* The cipher suites the association request will carry are
+			 * chosen by rsnPerformPolicySelection(), which the SSID path
+			 * below runs for every candidate. Without it a BSS_DESC fresh
+			 * from scan keeps u4RsnSelected* = 0 and the RSN IE goes out
+			 * with group cipher 0: on the MX6 the AP answered every
+			 * association with status 41 (invalid group cipher) until the
+			 * 7 s join timeout. wpa_supplicant hands over a BSSID on every
+			 * connect to this driver. */
+#if CFG_SUPPORT_WAPI
+			if (!prAdapter->rWifiVar.rConnSettings.fgWapiMode)
+#endif
+				if (!rsnPerformPolicySelection(prAdapter, prBssDesc))
+					DBGLOG(RSN, WARN, "BSSID %pM fails the RSN policy check\n", prBssDesc->aucBSSID);
 			prCandBssDesc = prBssDesc;
 			break;
 		}
