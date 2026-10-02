@@ -63,9 +63,13 @@ void qmu_done_tx(struct musb *musb, u8 ep_num, unsigned long flags)
 	}
 
 	if (TGPD_IS_FLAGS_HWO(gpd)) {
-		qmu_printk(K_DEBUG, "[TXD]" "%s HWO=1, CPR=%x\n", __func__,
-			   os_readl(USB_QMU_TQCPR(ep_num)));
-		BUG_ON(1);
+		/* Was BUG_ON(1). A QMU desync is recoverable, see the same
+		 * condition in qmu_done_rx() below.
+		 */
+		if (__ratelimit(&ratelimit_tx))
+			qmu_printk(K_ERR, "[TXD][ERROR]" "%s HWO=1, CPR=%x - queue desync, dropping\n",
+				   __func__, os_readl(USB_QMU_TQCPR(ep_num)));
+		return;
 	}
 
 	while (gpd != gpd_current && !TGPD_IS_FLAGS_HWO(gpd)) {
@@ -231,8 +235,17 @@ void qmu_done_rx(struct musb *musb, u8 ep_num, unsigned long flags)
 	}
 
 	if (TGPD_IS_FLAGS_HWO(gpd)) {
-		qmu_printk(K_ERR, "[RXD][ERROR]" "HWO=1!!\n");
-		BUG_ON(1);
+		/* The head GPD still belongs to the hardware while the completion
+		 * handler is running, i.e. the queue is out of sync with the QMU.
+		 *
+		 * This used to be BUG_ON(1), which could panic the phone during a
+		 * large adb push. A desync is recoverable: bail out and let the
+		 * disconnect/flush path rebuild the queues, as the milder desync
+		 * above already does.
+		 */
+		if (__ratelimit(&ratelimit_rx))
+			qmu_printk(K_ERR, "[RXD][ERROR]" "HWO=1 - queue desync, dropping\n");
+		return;
 	}
 
 	while (gpd != gpd_current && !TGPD_IS_FLAGS_HWO(gpd)) {
@@ -251,9 +264,15 @@ void qmu_done_rx(struct musb *musb, u8 ep_num, unsigned long flags)
 		request->actual += rcv_len;
 
 		if (!TGPD_GET_NEXT(gpd) || !TGPD_GET_DATA(gpd)) {
-			qmu_printk(K_ERR, "[RXD][ERROR]" "%s EP%d ,gpd=%p\n", __func__, ep_num,
-				   gpd);
-			BUG_ON(1);
+			/* Was BUG_ON(1). Truncated chain: stop walking it. gpd is still
+			 * valid here, so the diagnostic block after the loop can report
+			 * the queue state. Mirrors what qmu_done_tx() already does for
+			 * its own "Next GPD is null" case.
+			 */
+			if (__ratelimit(&ratelimit_rx))
+				qmu_printk(K_ERR, "[RXD][ERROR]" "%s EP%d gpd=%p - chain truncated\n",
+					   __func__, ep_num, gpd);
+			break;
 		}
 
 		gpd = TGPD_GET_NEXT(gpd);
@@ -261,9 +280,14 @@ void qmu_done_rx(struct musb *musb, u8 ep_num, unsigned long flags)
 		gpd = gpd_phys_to_virt(gpd, USB_RX, ep_num);
 
 		if (!gpd) {
-			qmu_printk(K_ERR, "[RXD][ERROR]" "%s EP%d ,gpd=%p\n", __func__, ep_num,
-				   gpd);
-			BUG_ON(1);
+			/* Was BUG_ON(1). Unmappable GPD address - must return rather than
+			 * break, because the diagnostic block after the loop dereferences
+			 * gpd.
+			 */
+			if (__ratelimit(&ratelimit_rx))
+				qmu_printk(K_ERR, "[RXD][ERROR]" "%s EP%d gpd=NULL - unmappable, dropping\n",
+					   __func__, ep_num);
+			return;
 		}
 
 		Rx_gpd_last[ep_num] = gpd;
