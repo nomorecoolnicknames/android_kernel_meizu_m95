@@ -917,8 +917,8 @@ int st_lsm6ds3_set_drdy_irq(struct lsm6ds3_sensor_data *sdata, bool state)
 	    mask = 0x02;
 		break;
 	case ST_INDIO_DEV_SIGN_MOTION:
-		if (sdata->cdata->sensors_enabled &
-					(1 << ST_INDIO_DEV_STEP_DETECTOR))
+		if (!state && (sdata->cdata->sensors_enabled &
+					(1 << ST_INDIO_DEV_STEP_DETECTOR)))
 			return 0;
 
 		reg_addr = ST_LSM6DS3_INT1_ADDR;
@@ -929,8 +929,8 @@ int st_lsm6ds3_set_drdy_irq(struct lsm6ds3_sensor_data *sdata, bool state)
 		mask = ST_LSM6DS3_STEP_COUNTER_DRDY_IRQ_MASK;
 		break;
 	case ST_INDIO_DEV_STEP_DETECTOR:
-		if (sdata->cdata->sensors_enabled &
-					(1 << ST_INDIO_DEV_SIGN_MOTION))
+		if (!state && (sdata->cdata->sensors_enabled &
+					(1 << ST_INDIO_DEV_SIGN_MOTION)))
 			return 0;
 
 		reg_addr = ST_LSM6DS3_INT1_ADDR;
@@ -2655,11 +2655,14 @@ EXPORT_SYMBOL(st_lsm6ds3_common_remove);
 #ifdef CONFIG_PM
 int st_lsm6ds3_common_suspend(struct lsm6ds3_data *cdata)
 {
+	int err, i;
+	struct lsm6ds3_sensor_data *sdata;
+#ifndef CONFIG_ST_LSM6DS3_IIO_SENSORS_WAKEUP
+	u8 tmp_sensors_enabled;
+#endif
+
 	pr_err("st_lsm6ds3_common_suspend######################\n");
 #ifndef CONFIG_ST_LSM6DS3_IIO_SENSORS_WAKEUP
-	int err, i;
-	u8 tmp_sensors_enabled;
-	struct lsm6ds3_sensor_data *sdata;
 
 	tmp_sensors_enabled = cdata->sensors_enabled;
 
@@ -2702,10 +2705,11 @@ EXPORT_SYMBOL(st_lsm6ds3_common_suspend);
 
 int st_lsm6ds3_common_resume(struct lsm6ds3_data *cdata)
 {
-	pr_err("st_lsm6ds3_common_resume######################\n");
-#ifndef CONFIG_ST_LSM6DS3_IIO_SENSORS_WAKEUP
 	int err, i;
 	struct lsm6ds3_sensor_data *sdata;
+
+	pr_err("st_lsm6ds3_common_resume######################\n");
+#ifndef CONFIG_ST_LSM6DS3_IIO_SENSORS_WAKEUP
 
 	for (i = 0; i < ST_INDIO_DEV_NUM; i++) {
 		if ((i == ST_INDIO_DEV_SIGN_MOTION)
@@ -2723,16 +2727,18 @@ int st_lsm6ds3_common_resume(struct lsm6ds3_data *cdata)
 	}
 #endif /* CONFIG_ST_LSM6DS3_IIO_SENSORS_WAKEUP */
 
-#if 1
+	sdata = iio_priv(cdata->indio_dev[ST_INDIO_DEV_ACCEL]);
 	if (!sdata->sensor_phone_calling) {
 		for (i = 0; i < ST_INDIO_DEV_NUM; i++) {
-			//if (i == ST_INDIO_DEV_STEP_COUNTER)
-			//	continue;
+			if (!(cdata->sensors_enabled & (1 << i)))
+				continue;
+
 			sdata = iio_priv(cdata->indio_dev[i]);
-			st_lsm6ds3_set_drdy_irq(sdata, true);
+			err = st_lsm6ds3_set_drdy_irq(sdata, true);
+			if (err < 0)
+				return err;
 		}
 	}
-#endif
 	return 0;
 }
 EXPORT_SYMBOL(st_lsm6ds3_common_resume);
