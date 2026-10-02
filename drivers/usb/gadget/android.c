@@ -2856,6 +2856,10 @@ static int __init init(void)
 	INIT_WORK(&dev->work, android_work);
 	mutex_init(&dev->mutex);
 
+	/* Do not call functionfs_init() here: ffs_function_init() registers
+	 * the filesystem during android_bind(), and a second
+	 * register_filesystem() makes it fail with -EBUSY, aborting the bind.
+	 */
 	err = android_create_device(dev);
 	if (err) {
 		pr_err("%s: failed to create android device %d", __func__, err);
