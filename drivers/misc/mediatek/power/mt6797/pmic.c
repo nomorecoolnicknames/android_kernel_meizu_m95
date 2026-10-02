@@ -1588,11 +1588,17 @@ static const int mt6351_VRF18_1_voltages[] = {
 	1810000,
 };
 
+/*
+ * MT6351 VGP3 step 3 is 1.22 V, as in the stock kernel and in
+ * mt6351_rf18_voltages[]. VGP3 is the front camera (OV5695) DVDD and the
+ * sensor driver requests exactly 1220000 uV; without a matching table entry
+ * regulator_set_voltage() fails and the sub sensor is never powered.
+ */
 static const int mt6351_VGP3_voltages[] = {
 	1000000,
 	1050000,
 	1100000,
-	1200000,
+	1220000,
 	1300000,
 	1500000,
 	1800000,
