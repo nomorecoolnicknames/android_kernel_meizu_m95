@@ -50,7 +50,13 @@
 /*
  * Buffer hash
  */
-#define DM_BUFIO_HASH_BITS	20
+/*
+ * apexd sets up a dozen or more dm-verity devices and each bufio client
+ * vmalloc()s (1 << HASH_BITS) hlist_heads: 8 MB per client at 20 bits.
+ * Mainline replaced the table with an rbtree in 3.19 (4e420c452b39); until
+ * then 14 bits (128 KB per client) is plenty for small verity caches.
+ */
+#define DM_BUFIO_HASH_BITS	14
 #define DM_BUFIO_HASH(block) \
 	((((block) >> DM_BUFIO_HASH_BITS) ^ (block)) & \
 	 ((1 << DM_BUFIO_HASH_BITS) - 1))

@@ -737,8 +737,12 @@ static int verity_ctr(struct dm_target *ti, unsigned argc, char **argv)
 		goto bad;
 	}
 
-	if (argc < 10 || argc > 11) {
-		ti->error = "Invalid argument count: 10-11 arguments required";
+	/* Newer avbtool appends the upstream opt_params tail (e.g.
+	 * "1 check_at_most_once"). This variant knows 10 args plus the MTK
+	 * "mode" at argv[10]; ignore anything beyond it so APEX verity
+	 * tables still load (all blocks are then always verified). */
+	if (argc < 10) {
+		ti->error = "Invalid argument count: 10+ arguments required";
 		r = -EINVAL;
 		goto bad;
 	}
