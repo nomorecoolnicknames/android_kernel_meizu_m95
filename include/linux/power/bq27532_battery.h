@@ -131,6 +131,7 @@ extern unsigned int bq27532_battery_voltage(void);
 extern signed int bq27532_battery_read_temperature(void);
 extern signed int bq27532_battery_read_soc(void);
 extern signed int bq27532_battery_read_fullchargecapacity(void);
+extern signed int bq27532_battery_read_remaining_capacity(void);
 extern signed int bq27532_get_battery_data(int update);
 extern signed int bq27532_battery_read_truesoc(void);
 extern void bq27532_sync_truesoc(void);

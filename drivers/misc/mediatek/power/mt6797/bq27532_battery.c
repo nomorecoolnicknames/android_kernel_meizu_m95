@@ -175,6 +175,20 @@ static inline int bq27532_battery_read_nac(struct bq27532_device_info *di)
 	return bq27532_battery_read_charge(di, BQ27532_REG_NAC);
 }
 
+/* Remaining (nominal available) capacity in uAh, for
+ * POWER_SUPPLY_PROP_CHARGE_COUNTER. Clamped to 0 on read error so the
+ * framework never sees a negative errno as a charge value. */
+signed int bq27532_battery_read_remaining_capacity(void)
+{
+	int nac;
+
+	if (!battery_exist)
+		return 0;
+
+	nac = bq27532_battery_read_nac(di_info);
+	return nac < 0 ? 0 : nac;
+}
+
 static inline int bq27532_battery_read_fcc(struct bq27532_device_info *di)
 {
 	return bq27532_battery_read_charge(di, BQ27532_REG_FCC);
@@ -275,25 +289,36 @@ signed int bq27532_battery_current_now(void)
 	return now_curr;
 }
 
+/*
+ * An I2C error must not be reported as a voltage (voltage_now and the CV
+ * check in charging_hw_bq2589x.c). On an error the last good reading stands;
+ * before the first one, 3800 mV, as reported without a battery.
+ */
+static unsigned int forge_volt_last;	/* last good battery voltage, mV */
+static unsigned int forge_volt_errors;
+module_param(forge_volt_errors, uint, 0444);
+
 unsigned int bq27532_battery_voltage(void)
 {
-	unsigned int volt;
+	int volt;
 
 	if (!battery_exist)
 		return 3800;
 
 	volt = BQ27532_read_i2c(di_info, BQ27532_REG_VOLT);
+	if (volt >= 0)
+		volt = BQ27532_read_i2c(di_info, BQ27532_REG_VOLT);
+
 	if (volt < 0) {
-		dev_err(di_info->dev, "error reading voltage\n");
-		return volt;
+		unsigned int keep = forge_volt_last ? forge_volt_last : 3800;
+
+		if (forge_volt_errors++ % 100 == 0)
+			dev_err(di_info->dev, "error reading voltage %d, keeping %u mV (errors %u)\n",
+				volt, keep, forge_volt_errors);
+		return keep;
 	}
 
-	volt = BQ27532_read_i2c(di_info, BQ27532_REG_VOLT);
-	if (volt < 0) {
-		dev_err(di_info->dev, "error reading voltage\n");
-		return volt;
-	}
-
+	forge_volt_last = volt;
 	return volt;
 }
 
@@ -397,6 +422,21 @@ signed int bq27532_battery_read_int_temperature(void)
 	return temp;
 }
 
+/*
+ * An I2C error would otherwise reach BMT_status.SOC as a negative capacity,
+ * and Android shuts down on a level <= 0 without a charger. 1 (default): a
+ * failed or out-of-range read is retried, then the last good SOC stands
+ * (at least 1 %); a real 0 at or below 3300 mV still passes. 0: pass the
+ * error on.
+ */
+static int forge_soc_guard = 1;
+module_param(forge_soc_guard, int, 0644);
+MODULE_PARM_DESC(forge_soc_guard,
+	"1 = keep the last good SOC on a gauge read error (default), 0 = pass the error on");
+static signed int forge_soc_last = -1;	/* last SOC read from the gauge, 0-100 */
+static unsigned int forge_soc_errors;
+module_param(forge_soc_errors, uint, 0444);
+
 signed int bq27532_battery_read_soc(void)
 {
 	signed int soc = 0;
@@ -410,12 +450,26 @@ signed int bq27532_battery_read_soc(void)
 
 	}while(soc == 0 && num++ < 5);
 
+	for (num = 0; forge_soc_guard && (soc < 0 || soc > 100) && num < 3; num++)
+		soc = BQ27532_read_i2c(di_info, BQ27532_REG_SOC);
+
 	if((soc == 0) && (bq27532_battery_voltage() > 3300))
 		soc = 1;
 
-	if (soc < 0)
+	if (soc < 0 || soc > 100) {
 		dev_dbg(di_info->dev, "error reading relative State-of-Charge\n");
+		if (forge_soc_guard) {
+			int bad = soc;
 
+			soc = forge_soc_last >= 1 ? forge_soc_last : 1;
+			if (forge_soc_errors++ % 100 == 0)
+				pr_err("[FORGE_BAT] bq27532: SOC read %d, keeping %d %% (errors %u)\n",
+				       bad, soc, forge_soc_errors);
+		}
+		return soc;
+	}
+
+	forge_soc_last = soc;
 	return soc;
 }
 
@@ -492,7 +546,9 @@ signed int bq27532_get_battery_data(int update)
 
 static int bq27532_battery_read_fw_version(struct bq27532_device_info *di)
 {
-	BQ27532_write_i2c(di, BQ27532_REG_CTRL, FW_VER_SUBCMD);
+	/* Control() subcommands are little-endian; BQ27532_write_i2c sends the
+	 * high byte first. */
+	i2c_smbus_write_word_data(di->client, BQ27532_REG_CTRL, FW_VER_SUBCMD);
 
 	msleep(10);
 
@@ -510,7 +566,9 @@ static int bq27532_battery_read_device_type(struct bq27532_device_info *di)
 
 static int bq27532_battery_read_dataflash_version(struct bq27532_device_info *di)
 {
-	BQ27532_write_i2c(di, BQ27532_REG_CTRL, DF_VER_SUBCMD);
+	/* Control() subcommands are little-endian; BQ27532_write_i2c sends the
+	 * high byte first. */
+	i2c_smbus_write_word_data(di->client, BQ27532_REG_CTRL, DF_VER_SUBCMD);
 
 	msleep(10);
 
