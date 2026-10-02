@@ -1476,6 +1476,17 @@ void glP2pDestroyWirelessDevice(void)
 #endif
 }
 
+/* The glue behind the p2p wiphy (ap0, p2p0), or NULL for any other wiphy.
+ * Its priv is a pointer to wlan0's GLUE_INFO_T (glP2pCreateWirelessDevice,
+ * "set priv as pointer to glue structure"), not the glue itself as on wlan0's
+ * wiphy - the shared vendor handlers in gl_vendor.c have to tell the two apart. */
+P_GLUE_INFO_T glP2pWiphyToGlue(struct wiphy *wiphy)
+{
+	if (gprP2pWdev == NULL || gprP2pWdev->wiphy != wiphy)
+		return NULL;
+	return *((P_GLUE_INFO_T *) wiphy_priv(wiphy));
+}
+
 /*----------------------------------------------------------------------------*/
 /*!
 * \brief Unregister Net Device for Wi-Fi Direct

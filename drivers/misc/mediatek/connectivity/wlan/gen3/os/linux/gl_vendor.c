@@ -98,6 +98,17 @@ int mtk_cfg80211_nla_put_type(struct sk_buff *skb, ENUM_NLA_PUT_DATE_TYPE type, 
 	return 0;
 }
 
+/* GET_CHANNEL_LIST and SET_COUNTRY_CODE are registered on the p2p wiphy too
+ * (mtk_p2p_vendor_ops), whose priv only points to the glue; the Wi-Fi HAL
+ * sets the country code on ap0 while softAP is on. The reply still goes to
+ * the wiphy that received the command. */
+static P_GLUE_INFO_T vendorWiphyToGlue(struct wiphy *wiphy)
+{
+	P_GLUE_INFO_T prGlueInfo = glP2pWiphyToGlue(wiphy);
+
+	return prGlueInfo ? prGlueInfo : (P_GLUE_INFO_T) wiphy_priv(wiphy);
+}
+
 int mtk_cfg80211_vendor_get_channel_list(struct wiphy *wiphy, struct wireless_dev *wdev, const void *data, int data_len)
 {
 	P_GLUE_INFO_T prGlueInfo;
@@ -121,7 +132,7 @@ int mtk_cfg80211_vendor_get_channel_list(struct wiphy *wiphy, struct wireless_de
 
 	DBGLOG(REQ, INFO, "Get channel list for band: %d\n", band);
 
-	prGlueInfo = (P_GLUE_INFO_T) wiphy_priv(wiphy);
+	prGlueInfo = vendorWiphyToGlue(wiphy);
 	if (!prGlueInfo)
 		return -EFAULT;
 
@@ -195,7 +206,7 @@ int mtk_cfg80211_vendor_set_country_code(struct wiphy *wiphy, struct wireless_de
 
 	DBGLOG(REQ, INFO, "Set country code: %c%c\n", country[0], country[1]);
 
-	prGlueInfo = (P_GLUE_INFO_T) wiphy_priv(wiphy);
+	prGlueInfo = vendorWiphyToGlue(wiphy);
 	if (!prGlueInfo)
 		return -EFAULT;
 
