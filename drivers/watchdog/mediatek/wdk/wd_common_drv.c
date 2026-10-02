@@ -274,7 +274,7 @@ static int start_kicker_thread_with_default_setting(void)
 
 	spin_lock(&lock);
 
-	g_kinterval = 20;	/* default interval: 20s */
+	g_kinterval = 5;	/* default interval: 5s (HW timeout is 30 s) */
 
 	g_need_config = 0;	/* Note, we DO NOT want to call configure function */
 
@@ -289,6 +289,22 @@ static int start_kicker_thread_with_default_setting(void)
 }
 
 static unsigned int cpus_kick_bit;
+/* jiffies of the last external WDT kick and the online-CPU mask it was
+ * checked against, see kwdt_thread(). */
+static unsigned long wk_last_kick_jiffies;
+static unsigned int wk_last_expect;
+
+/* CPUs that are online right now, as a kick_bit-style mask. */
+static unsigned int wk_online_bits(void)
+{
+	unsigned int bits = 0;
+	int c;
+
+	for_each_online_cpu(c)
+		if (c < 32)
+			bits |= 1U << c;
+	return bits;
+}
 void wk_start_kick_cpu(int cpu)
 {
 	if (IS_ERR(wk_tsk[cpu])) {
@@ -478,11 +494,34 @@ static int kwdt_thread(void *arg)
 					    ("[WDK],local_bit:0x%x,cpu:%d,check bit0x:%x,%d,%d,%lld,RT[%lld]\n",
 					     local_bit, cpu, wk_check_kick_bit(), lasthpg_cpu, lasthpg_act,
 					     lasthpg_t, sched_clock());
-					if (local_bit == wk_check_kick_bit()) {
-						printk_deferred("[WDK]: kick Ex WDT,RT[%lld]\n",
-								sched_clock());
-						mtk_wdt_restart(WD_TYPE_NORMAL);	/* for KICK external wdt */
-						local_bit = 0;
+					/* The external WDT fires 30 s after the last kick.
+					 * A CPU set in cpus_kick_bit at CPU_UP_PREPARE may
+					 * not have its wdtk thread running yet, so:
+					 *  1. compare against the CPUs that are online now
+					 *     (and still tracked);
+					 *  2. if more than half the timeout has passed since
+					 *     the last kick, kick anyway and log which CPUs
+					 *     did not mark in, so a hotplug race does not
+					 *     reset the phone. */
+					{
+						unsigned int expect = wk_check_kick_bit() & wk_online_bits();
+						unsigned long since = jiffies - wk_last_kick_jiffies;
+						bool all_in = (local_bit & expect) == expect;
+						bool overdue = wk_last_kick_jiffies &&
+							       time_after(jiffies, wk_last_kick_jiffies + 15 * HZ);
+
+						if (all_in || overdue) {
+							if (!all_in)
+								printk_deferred("[WDK]: safety kick, CPUs not marked in: 0x%x (expect 0x%x got 0x%x, %u ms since last kick)\n",
+										expect & ~local_bit, expect, local_bit,
+										jiffies_to_msecs(since));
+							printk_deferred("[WDK]: kick Ex WDT,RT[%lld]\n",
+									sched_clock());
+							mtk_wdt_restart(WD_TYPE_NORMAL);	/* for KICK external wdt */
+							wk_last_kick_jiffies = jiffies;
+							wk_last_expect = expect;
+							local_bit = 0;
+						}
 					}
 					kick_bit = local_bit;
 					spin_unlock(&lock);
@@ -779,6 +818,7 @@ static void wdk_work_callback(struct work_struct *work)
 		}
 	}
 	mtk_wdt_restart(WD_TYPE_NORMAL);	/* for KICK external wdt */
+	wk_last_kick_jiffies = jiffies;
 	cpu_hotplug_enable();
 	pr_alert("[WDK]init_wk done late_initcall cpus_kick_bit=0x%x -----\n", cpus_kick_bit);
 
