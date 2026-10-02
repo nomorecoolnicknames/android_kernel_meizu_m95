@@ -21,6 +21,7 @@
 #include <linux/smpboot.h>
 #include <linux/atomic.h>
 #include <linux/lglock.h>
+#include <linux/moduleparam.h>
 
 /*
  * Structure to determine completion condition and record errors.  May
@@ -471,6 +472,25 @@ repeat:
 	}
 }
 
+void stop_machine_park(int cpu)
+{
+	struct cpu_stopper *stopper = &per_cpu(cpu_stopper, cpu);
+	/*
+	 * Lockless. cpu_stopper_thread() will take stopper->lock and flush
+	 * the pending works before it parks, until then it is fine to queue
+	 * the new works.
+	 */
+	stopper->enabled = false;
+	kthread_park(per_cpu(cpu_stopper_task, cpu));
+}
+
+/*
+ * Advertises the stop_machine hotplug fixes (9866c51b, 56c36fdf) to
+ * userspace, which keeps CPU hotplug enabled only when this reads Y.
+ */
+static bool forge_hotplug_fixed = true;
+module_param(forge_hotplug_fixed, bool, 0444);
+
 extern void sched_set_stop_task(int cpu, struct task_struct *stop);
 
 static void cpu_stop_create(unsigned int cpu)
@@ -481,15 +501,8 @@ static void cpu_stop_create(unsigned int cpu)
 static void cpu_stop_park(unsigned int cpu)
 {
 	struct cpu_stopper *stopper = &per_cpu(cpu_stopper, cpu);
-	struct cpu_stop_work *work;
-	unsigned long flags;
 
-	/* drain remaining works */
-	spin_lock_irqsave(&stopper->lock, flags);
-	list_for_each_entry(work, &stopper->works, list)
-		cpu_stop_signal_done(work->done, false);
-	stopper->enabled = false;
-	spin_unlock_irqrestore(&stopper->lock, flags);
+	WARN_ON(!list_empty(&stopper->works));
 }
 
 static void cpu_stop_unpark(unsigned int cpu)
