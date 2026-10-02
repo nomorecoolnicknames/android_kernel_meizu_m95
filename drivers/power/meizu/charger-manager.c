@@ -22,6 +22,7 @@
 #include <linux/sched.h>
 #include <linux/poll.h>
 #include <linux/power_supply.h>
+#include <linux/of.h>
 #include <linux/wakelock.h>
 #include <linux/time.h>
 #include <linux/alarmtimer.h>
@@ -133,10 +134,14 @@ struct battery_data {
 
 static enum power_supply_property ac_props[] = {
 	POWER_SUPPLY_PROP_ONLINE,
+	POWER_SUPPLY_PROP_CURRENT_MAX,
+	POWER_SUPPLY_PROP_VOLTAGE_MAX,
 };
 
 static enum power_supply_property usb_props[] = {
 	POWER_SUPPLY_PROP_ONLINE,
+	POWER_SUPPLY_PROP_CURRENT_MAX,
+	POWER_SUPPLY_PROP_VOLTAGE_MAX,
 };
 
 static enum power_supply_property battery_props[] = {
@@ -145,6 +150,7 @@ static enum power_supply_property battery_props[] = {
 	POWER_SUPPLY_PROP_VOLTAGE_NOW,
 	POWER_SUPPLY_PROP_batt_vol,
 	POWER_SUPPLY_PROP_CURRENT_NOW,
+	POWER_SUPPLY_PROP_CHARGE_COUNTER,
 	POWER_SUPPLY_PROP_CAPACITY,
 	POWER_SUPPLY_PROP_TEMP,
 	POWER_SUPPLY_PROP_TECHNOLOGY,
@@ -166,6 +172,26 @@ void wake_up_bat(void)
 }
 EXPORT_SYMBOL(wake_up_bat);
 
+/* Input limit the charging path is currently allowed to draw from VBUS,
+ * in uA for the power_supply ABI (healthd "Max charging current").
+ * CHR_CURRENT_ENUM encodes current in units of 10 uA. */
+static int charger_input_current_max_uA(void)
+{
+	return (int)g_temp_input_CC_value * 10;
+}
+
+/* Live VBUS voltage from the bq2589x ADC in uV (the ADC reports mV).
+ * Falls back to the nominal 5 V if the read fails, so healthd never
+ * sees a negative errno as a voltage. */
+static int charger_voltage_max_uV(void)
+{
+	int mv = bq2589x_adc_read_charger_volt();
+
+	if (mv <= 0)
+		mv = 5000;
+	return mv * 1000;
+}
+
 static int ac_get_property(struct power_supply *psy,
 			   enum power_supply_property psp, union power_supply_propval *val)
 {
@@ -175,6 +201,12 @@ static int ac_get_property(struct power_supply *psy,
 	switch (psp) {
 	case POWER_SUPPLY_PROP_ONLINE:
 		val->intval = data->AC_ONLINE;
+		break;
+	case POWER_SUPPLY_PROP_CURRENT_MAX:
+		val->intval = charger_input_current_max_uA();
+		break;
+	case POWER_SUPPLY_PROP_VOLTAGE_MAX:
+		val->intval = charger_voltage_max_uV();
 		break;
 	default:
 		ret = -EINVAL;
@@ -192,6 +224,12 @@ static int usb_get_property(struct power_supply *psy,
 	switch (psp) {
 	case POWER_SUPPLY_PROP_ONLINE:
 		val->intval = data->USB_ONLINE;
+		break;
+	case POWER_SUPPLY_PROP_CURRENT_MAX:
+		val->intval = charger_input_current_max_uA();
+		break;
+	case POWER_SUPPLY_PROP_VOLTAGE_MAX:
+		val->intval = charger_voltage_max_uV();
 		break;
 	default:
 		ret = -EINVAL;
@@ -227,16 +265,23 @@ static int battery_get_property(struct power_supply *psy,
 				val->intval = data->capacity;
 			break;
 		case POWER_SUPPLY_PROP_VOLTAGE_NOW:
-			val->intval = data->voltage_now;
+			/* power_supply ABI is uV; BMT_status.bat_vol is mV.
+			 * batt_vol below stays in mV: the camera 3A HAL
+			 * (libcam.hal3a.v3.so) reads it as mV. */
+			val->intval = data->voltage_now * 1000;
 			break;
 		case POWER_SUPPLY_PROP_batt_vol:
 			val->intval = data->voltage_now;
 			break;
 		case POWER_SUPPLY_PROP_CURRENT_NOW:
 			battery_charging_control(CHARGING_CMD_GET_BATTERYCURR_NOW, &data->curr_now);
-			if (BMT_status.charger_exist == KAL_FALSE)
-				data->curr_now -= 65535;
-			val->intval = data->curr_now;
+			/* bq27532 NOW_CURR is a signed 16-bit value in mA
+			 * (negative = discharging); the ABI wants uA. */
+			val->intval = (int)(s16)(data->curr_now & 0xffff) * 1000;
+			break;
+		case POWER_SUPPLY_PROP_CHARGE_COUNTER:
+			/* uAh remaining capacity from the bq27532 gauge */
+			val->intval = bq27532_battery_read_remaining_capacity();
 			break;
 		case POWER_SUPPLY_PROP_TEMP:
 			val->intval = data->batt_temp;
@@ -351,6 +396,16 @@ static void usb_update(struct usb_data *usb_data)
 	power_supply_changed(usb_psy);
 }
 
+/*
+ * 1 (default): report FULL on the cable once the gauge SOC is 100 and
+ * DISCHARGING without a charger. 0: the vendor CHARGING/NOT_CHARGING, which
+ * Android shows as never "Charged" and "Not charging" on battery.
+ */
+static int forge_status_full = 1;
+module_param(forge_status_full, int, 0644);
+MODULE_PARM_DESC(forge_status_full,
+	"1 = FULL at SOC 100 on the cable and DISCHARGING on battery (default), 0 = stock CHARGING/NOT_CHARGING");
+
 static void battery_update(struct battery_data *bat_data)
 {
 	struct power_supply *bat_psy = &bat_data->psy;
@@ -371,8 +426,13 @@ static void battery_update(struct battery_data *bat_data)
 
 	if (BMT_status.charger_exist == KAL_TRUE) {     
 		bat_data->batt_status = POWER_SUPPLY_STATUS_CHARGING;  
+		/* see forge_status_full: the gauge at 100 % on the cable */
+		if (forge_status_full && BMT_status.SOC >= 100)
+			bat_data->batt_status = POWER_SUPPLY_STATUS_FULL;
 	} else {	/* Only Battery */
-		bat_data->batt_status = POWER_SUPPLY_STATUS_NOT_CHARGING;
+		bat_data->batt_status = forge_status_full ?
+			POWER_SUPPLY_STATUS_DISCHARGING :
+			POWER_SUPPLY_STATUS_NOT_CHARGING;
 	} 
 
 	if (cmd_discharging == 1 || BMT_status.batt_status == TEMP_POS_LOW ||
@@ -424,20 +484,99 @@ static void bq2589x_battery_GetBatteryData(void)
 			BMT_status.SOC, BMT_status.charger_type);
 }
 
+/*
+ * The stock Flyme 8 kernel charges at 2050 mA (AC_CHARGER_CURRENT) where
+ * this BSP uses 1500 mA. 1 (default): 2050 mA in the T20/T15 row (10-20 C,
+ * SDI 10-15 C) only; all other rows and input limits are unchanged.
+ * 0: 1500 mA.
+ */
+static int forge_flyme8_ac = 1;
+module_param(forge_flyme8_ac, int, 0644);
+MODULE_PARM_DESC(forge_flyme8_ac, "MX6: 2050 mA (Flyme 8) instead of 1500 at 10-20 C (SDI 10-15) on a 5 V charger (1, default)");
+
+/*
+ * PE+ table set B, used by the stock kernel on board revision 1 (low nibble
+ * of the u32 at +4 of the LK "atag,lk_info" property in /chosen). In the
+ * PE+ branch each row's own current and input are used instead of the fixed
+ * 9/12 V ones:
+ *   <0 stop; 0-10 C 5 V 900 mA; 10-38 C 9 V 3000 mA, input 2000 mA;
+ *   38-41 C 9 V 2250 / 1500 mA; 41-46 C 5 V AC_CHARGER_CURRENT; 46-61 C stop.
+ * 1 (default): set B on a revision 1 board, set A otherwise. 0: always set A.
+ */
+static int forge_pe_set_b = 1;
+module_param(forge_pe_set_b, int, 0644);
+MODULE_PARM_DESC(forge_pe_set_b, "MX6: Flyme 8 PE+ table set B (9 V 3 A at 10-38 C) on board revision 1 (1, default), or set A always (0)");
+
+#define FORGE_TEMP_POS_T38	38
+
+static BATTERY_TEMP_STRUCT forge_pe_set_b_table[8] = {
+	{0, TEMP_POS_LOW, NORMAL_CHARGER, VOLTAGE_5V_SUPPORT, CHARGE_CURRENT_0_00_MA, AC_CHARGER_CURRENT},
+	{10, TEMP_POS_T10, NORMAL_CHARGER, VOLTAGE_5V_SUPPORT, CHARGING_0_3C_CHARGER_CURRENT, AC_CHARGER_CURRENT},
+	{38, FORGE_TEMP_POS_T38, QUICK_CHARGER, VOLTAGE_9V_SUPPORT, CHARGE_CURRENT_3000_00_MA, CHARGE_CURRENT_2000_00_MA},
+	{41, TEMP_POS_T41, QUICK_CHARGER, VOLTAGE_9V_SUPPORT, TA_AC_1_5C_CHARGING_CURRENT, TA_AC_9V_INPUT_CURRENT},
+	{46, TEMP_POS_NORMAL, NORMAL_CHARGER, VOLTAGE_5V_SUPPORT, AC_CHARGER_CURRENT, AC_CHARGER_CURRENT},
+	{61, TEMP_POS_HIGH, NORMAL_CHARGER, VOLTAGE_5V_SUPPORT, CHARGE_CURRENT_0_00_MA, AC_CHARGER_CURRENT}
+};
+
+/* LK board revision; -1 = unknown */
+static int forge_board_rev(void)
+{
+	static int rev = -2;
+	struct device_node *np;
+	const __be32 *p;
+	int len = 0;
+
+	if (rev != -2)
+		return rev;
+	rev = -1;
+	np = of_find_node_by_path("/chosen");
+	if (!np)
+		np = of_find_node_by_path("/chosen@0");
+	if (np) {
+		p = of_get_property(np, "atag,lk_info", &len);
+		if (p && len >= 8)
+			rev = le32_to_cpup((const __le32 *)((const u8 *)p + 4)) & 0xF;
+		of_node_put(np);
+	}
+	pr_info("[BATTERY] board revision %d (atag,lk_info %d bytes): PE+ table set %s\n",
+		rev, len, rev == 1 && forge_pe_set_b ? "B" : "A");
+	return rev;
+}
+
+static bool forge_set_b(void)
+{
+	return forge_pe_set_b && forge_board_rev() == 1;
+}
+
 static void battery_get_temp_stat(signed int temperature, int battery_id)
 {
-	BATTERY_TEMP_STRUCT *batt_temp_stat_table = battery_temp_stat_table[battery_id];
-	int i = 0;
+	BATTERY_TEMP_STRUCT *batt_temp_stat_table = forge_set_b() ?
+		forge_pe_set_b_table : battery_temp_stat_table[battery_id];
+	int i = 0, last = 0;
 
-	for (i = 0; i < 9; i++) {
-		if (temperature < batt_temp_stat_table[i].batt_temperature) {
-			BMT_status.batt_status = batt_temp_stat_table[i].batt_temp_stat;
+	/*
+	 * Stop at the table end or the zero terminator row; with no match
+	 * use the last row (TEMP_POS_HIGH, 0 mA), so charging stops.
+	 */
+	for (i = 0; i < ARRAY_SIZE(battery_temp_stat_table[0]); i++) {
+		if (i && !batt_temp_stat_table[i].batt_temperature)
 			break;
-		}
+		last = i;
+		if (temperature < batt_temp_stat_table[i].batt_temperature)
+			break;
 	}
+	i = last;
+	if (temperature >= batt_temp_stat_table[i].batt_temperature)
+		BMT_status.batt_status = TEMP_POS_HIGH;
+	else
+		BMT_status.batt_status = batt_temp_stat_table[i].batt_temp_stat;
 
 	g_temp_CC_value = batt_temp_stat_table[i].charger_current;
 	g_temp_input_CC_value = batt_temp_stat_table[i].input_current;
+	if (forge_flyme8_ac && g_temp_CC_value == AC_CHARGER_CURRENT &&
+	    (BMT_status.batt_status == TEMP_POS_T20 ||
+	     BMT_status.batt_status == TEMP_POS_T15))
+		g_temp_CC_value = CHARGE_CURRENT_2050_00_MA;
 	BMT_status.g_qcct_flag = batt_temp_stat_table[i].is_increase;
 	BMT_status.target_voltage = batt_temp_stat_table[i].target_vol;
 
@@ -711,6 +850,11 @@ static void select_charging_curret(void)
 
 static void select_qc_charging_curret(void)
 {
+	/* set B: the row's own current and input */
+	if (forge_set_b()) {
+		select_charging_curret_bcct();
+		return;
+	}
 	if (BMT_status.target_voltage == VOLTAGE_12V_SUPPORT) {
 		g_temp_input_CC_value = TA_AC_12V_INPUT_CURRENT;  //TA = 12V		
 		g_temp_CC_value = TA_AC_1_5C_CHARGING_CURRENT;
@@ -759,16 +903,27 @@ static void pchr_turn_on_charging(void)
 	}
 }
 
+/*
+ * The vendor code raises VBUS to 9/12 V (PE+) only with the screen off.
+ * 0 (default): ignore the screen state; temperature zones,
+ * TA_STOP_BATTERY_SOC and mcharger_disable still apply. 1: vendor behaviour.
+ */
+static int forge_qc_screen_cut;
+module_param(forge_qc_screen_cut, int, 0644);
+MODULE_PARM_DESC(forge_qc_screen_cut, "MX6: PE+ only with the screen off, as stock (1), or regardless of the screen (0, default)");
+
 static void battery_charger_voltage_increase(void)
 {
 	int hw_ovp_en = 0; 
+	kal_bool screen_on __maybe_unused =
+		forge_qc_screen_cut && BMT_status.is_screen_on;
 #if defined(MEIZU_FACTORY_BUILD)
 	if ((BMT_status.charger_type == STANDARD_CHARGER || BMT_status.charger_type == NONSTANDARD_CHARGER ||
 				BMT_status.charger_type == CHARGING_HOST) &&
 			(BMT_status.g_qcct_flag == QUICK_CHARGER) && (BMT_status.qc_check_flag == KAL_FALSE)) {
 #else
 	if ((BMT_status.charger_type == STANDARD_CHARGER || BMT_status.charger_type == NONSTANDARD_CHARGER) &&
-			(BMT_status.g_qcct_flag == QUICK_CHARGER) && (BMT_status.is_screen_on == KAL_FALSE) &&
+			(BMT_status.g_qcct_flag == QUICK_CHARGER) && !screen_on &&
 			(BMT_status.qc_check_flag == KAL_FALSE) && (BMT_status.SOC <= TA_STOP_BATTERY_SOC) &&
 			(BMT_status.mcharger_disable == 0)) {
 #endif
@@ -779,7 +934,7 @@ static void battery_charger_voltage_increase(void)
 	} else if (BMT_status.qc_connect == KAL_TRUE && (BMT_status.g_qcct_flag == NORMAL_CHARGER)) {
 #else
 	} else if (BMT_status.qc_connect == KAL_TRUE && (BMT_status.g_qcct_flag == NORMAL_CHARGER ||
-				BMT_status.is_screen_on == KAL_TRUE || BMT_status.mcharger_disable == 1)) {
+				screen_on || BMT_status.mcharger_disable == 1)) {
 #endif
 		/* reset the charger voltage*/
 		battery_charging_control(CHARGING_CMD_RESET_VCHR, NULL);
