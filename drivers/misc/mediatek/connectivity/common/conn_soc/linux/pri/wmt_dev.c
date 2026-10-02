@@ -1556,8 +1556,19 @@ INT32 wmt_dev_patch_get(PUINT8 pPatchName, osal_firmware **ppPatch, INT32 padSzB
 
 	set_fs(get_ds());
 
-	/* load patch file from fs */
-	iRet = wmt_dev_read_file(pPatchName, (const PPUINT8)&pfw->data, 0, padSzBuf);
+	/* load patch file from fs.
+	 * wmt_launcher passes bare patch names, which filp_open() would
+	 * resolve against "/"; look them up under CUST_CFG_WMT_PREFIX.
+	 */
+	if (pPatchName[0] != '/') {
+		UINT8 fullName[NAME_MAX + 1];
+
+		osal_snprintf(fullName, sizeof(fullName), "%s%s",
+			      CUST_CFG_WMT_PREFIX, pPatchName);
+		iRet = wmt_dev_read_file(fullName, (const PPUINT8)&pfw->data, 0, padSzBuf);
+	} else {
+		iRet = wmt_dev_read_file(pPatchName, (const PPUINT8)&pfw->data, 0, padSzBuf);
+	}
 	set_fs(orig_fs);
 
 	cred->fsuid.val = orig_uid;

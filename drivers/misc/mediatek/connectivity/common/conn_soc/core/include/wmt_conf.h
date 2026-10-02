@@ -31,7 +31,8 @@
 ********************************************************************************
 */
 #define CUST_CFG_WMT "WMT_SOC.cfg"
-#define CUST_CFG_WMT_PREFIX "/system/etc/firmware/"
+/* WMT_SOC.cfg and the WMT patches live on the vendor partition. */
+#define CUST_CFG_WMT_PREFIX "/vendor/etc/firmware/"
 
 /*******************************************************************************
 *                    E X T E R N A L   R E F E R E N C E S
