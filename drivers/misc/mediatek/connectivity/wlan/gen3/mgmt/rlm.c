@@ -1161,18 +1161,13 @@ VOID rlmRspGenerateVhtOpIE(P_ADAPTER_T prAdapter, P_MSDU_INFO_T prMsduInfo)
 * \return none
 */
 /*----------------------------------------------------------------------------*/
-static VOID rlmFillVhtCapIE(P_ADAPTER_T prAdapter, P_BSS_INFO_T prBssInfo, P_MSDU_INFO_T prMsduInfo)
+VOID rlmGetVhtCapIE(P_ADAPTER_T prAdapter, P_IE_VHT_CAP_T prVhtCap)
 {
-	P_IE_VHT_CAP_T prVhtCap;
 	P_VHT_SUPPORTED_MCS_FIELD prVhtSupportedMcsSet;
 	UINT_8 i;
 
 	ASSERT(prAdapter);
-	ASSERT(prBssInfo);
-	ASSERT(prMsduInfo);
-
-	prVhtCap = (P_IE_VHT_CAP_T)
-	    (((PUINT_8) prMsduInfo->prPacket) + prMsduInfo->u2FrameLength);
+	ASSERT(prVhtCap);
 
 	prVhtCap->ucId = ELEM_ID_VHT_CAP;
 	prVhtCap->ucLength = sizeof(IE_VHT_CAP_T) - ELEM_HDR_LEN;
@@ -1210,10 +1205,21 @@ static VOID rlmFillVhtCapIE(P_ADAPTER_T prAdapter, P_BSS_INFO_T prBssInfo, P_MSD
 	prVhtSupportedMcsSet->u2RxHighestSupportedDataRate = VHT_CAP_INFO_DEFAULT_HIGHEST_DATA_RATE;
 	prVhtSupportedMcsSet->u2TxHighestSupportedDataRate = VHT_CAP_INFO_DEFAULT_HIGHEST_DATA_RATE;
 
+}
+
+static VOID rlmFillVhtCapIE(P_ADAPTER_T prAdapter, P_BSS_INFO_T prBssInfo, P_MSDU_INFO_T prMsduInfo)
+{
+	P_IE_VHT_CAP_T prVhtCap;
+
+	ASSERT(prAdapter);
+	ASSERT(prBssInfo);
+	ASSERT(prMsduInfo);
+
+	prVhtCap = (P_IE_VHT_CAP_T)
+	    (((PUINT_8) prMsduInfo->prPacket) + prMsduInfo->u2FrameLength);
+	rlmGetVhtCapIE(prAdapter, prVhtCap);
 	ASSERT(IE_SIZE(prVhtCap) <= (ELEM_HDR_LEN + ELEM_MAX_LEN_VHT_CAP));
-
 	prMsduInfo->u2FrameLength += IE_SIZE(prVhtCap);
-
 }
 
 /*----------------------------------------------------------------------------*/

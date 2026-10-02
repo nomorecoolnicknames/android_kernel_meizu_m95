@@ -1199,7 +1199,8 @@ assocCheckRxReAssocRspFrameStatus(IN P_ADAPTER_T prAdapter, IN P_SW_RFB_T prSwRf
 		/* Update the information in the structure used to query and set
 		   OID_802_11_ASSOCIATION_INFORMATION. */
 		kalUpdateReAssocRspInfo(prAdapter->prGlueInfo,
-					(PUINT_8)&prAssocRspFrame->u2CapInfo, (UINT_32) (prSwRfb->u2PacketLen));
+					(PUINT_8)&prAssocRspFrame->u2CapInfo,
+					(UINT_32) (prSwRfb->u2PacketLen - prSwRfb->u2HeaderLen));
 	}
 	/* 4 <5> Update CAP_INFO and ASSOC_ID */
 	if (u2RxStatusCode == STATUS_CODE_SUCCESSFUL) {

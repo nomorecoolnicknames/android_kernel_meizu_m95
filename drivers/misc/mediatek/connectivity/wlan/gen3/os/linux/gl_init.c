@@ -2090,6 +2090,36 @@ static const struct net_device_ops wlan_netdev_ops = {
 	.ndo_select_queue = wlanSelectQueue,
 };
 
+struct wlan_wiphy_context {
+	GLUE_INFO_T glue;
+	struct ieee80211_supported_band band_5ghz;
+};
+
+#if CFG_SUPPORT_802_11AC
+static void wlanUpdateVhtCapabilities(struct wiphy *wiphy, P_ADAPTER_T adapter)
+{
+	struct wlan_wiphy_context *context = wiphy_priv(wiphy);
+	struct ieee80211_sta_vht_cap *cap = &context->band_5ghz.vht_cap;
+	IE_VHT_CAP_T ie;
+
+	kalMemZero(cap, sizeof(*cap));
+	if (!adapter->fgEnable5GBand ||
+	    !(adapter->rWifiVar.ucAvailablePhyTypeSet & PHY_TYPE_BIT_VHT) ||
+	    !IS_FEATURE_ENABLED(adapter->rWifiVar.ucStaHt) ||
+	    !IS_FEATURE_ENABLED(adapter->rWifiVar.ucStaVht))
+		return;
+
+	/* Match the capabilities sent in the STA association request. */
+	rlmGetVhtCapIE(adapter, &ie);
+	cap->cap = ie.u4VhtCapInfo;
+	cap->vht_mcs.rx_mcs_map = cpu_to_le16(ie.rVhtSupportedMcsSet.u2RxMcsMap);
+	cap->vht_mcs.tx_mcs_map = cpu_to_le16(ie.rVhtSupportedMcsSet.u2TxMcsMap);
+	cap->vht_mcs.rx_highest = cpu_to_le16(ie.rVhtSupportedMcsSet.u2RxHighestSupportedDataRate);
+	cap->vht_mcs.tx_highest = cpu_to_le16(ie.rVhtSupportedMcsSet.u2TxHighestSupportedDataRate);
+	cap->vht_supported = true;
+}
+#endif
+
 static void createWirelessDevice(void)
 {
 	struct wiphy *prWiphy = NULL;
@@ -2102,7 +2132,7 @@ static void createWirelessDevice(void)
 		return;
 	}
 	/* 4 <1.2> Create wiphy */
-	prWiphy = wiphy_new(&mtk_wlan_ops, sizeof(GLUE_INFO_T));
+	prWiphy = wiphy_new(&mtk_wlan_ops, sizeof(struct wlan_wiphy_context));
 	if (!prWiphy) {
 		DBGLOG(INIT, ERROR, "Allocating memory to wiphy device failed\n");
 		goto free_wdev;
@@ -2118,7 +2148,9 @@ static void createWirelessDevice(void)
 	prWiphy->bands[IEEE80211_BAND_2GHZ] = &mtk_band_2ghz;
 	/* always assign 5Ghz bands here, if the chip is not support 5Ghz,
 	   bands[IEEE80211_BAND_5GHZ] will be assign to NULL */
-	prWiphy->bands[IEEE80211_BAND_5GHZ] = &mtk_band_5ghz;
+	((struct wlan_wiphy_context *)wiphy_priv(prWiphy))->band_5ghz = mtk_band_5ghz;
+	prWiphy->bands[IEEE80211_BAND_5GHZ] =
+	    &((struct wlan_wiphy_context *)wiphy_priv(prWiphy))->band_5ghz;
 	prWiphy->signal_type = CFG80211_SIGNAL_TYPE_MBM;
 	prWiphy->cipher_suites = mtk_cipher_suites;
 	prWiphy->n_cipher_suites = ARRAY_SIZE(mtk_cipher_suites);
@@ -2757,8 +2789,16 @@ bailout:
 			       prGlueInfo->prAdapter->rWifiVar.ucThreadScheduling);
 		}
 
+		rtnl_lock();
 		if (FALSE == prAdapter->fgEnable5GBand)
 			prWdev->wiphy->bands[IEEE80211_BAND_5GHZ] = NULL;
+		else
+			prWdev->wiphy->bands[IEEE80211_BAND_5GHZ] =
+			    &((struct wlan_wiphy_context *)wiphy_priv(prWdev->wiphy))->band_5ghz;
+#if CFG_SUPPORT_802_11AC
+		wlanUpdateVhtCapabilities(prWdev->wiphy, prAdapter);
+#endif
+		rtnl_unlock();
 
 		kalSetHalted(FALSE);
 		/* set MAC address */

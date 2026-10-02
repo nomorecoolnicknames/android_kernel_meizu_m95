@@ -906,6 +906,9 @@ static mm_segment_t orgfs;
 static PUINT_8 apucFwPath[] = {
 	(PUINT_8) "/storage/sdcard0/",
 	(PUINT_8) "/etc/firmware/",
+	/* WIFI_RAM_CODE_6797 lives on /vendor. */
+	(PUINT_8) "/vendor/etc/firmware/",
+	(PUINT_8) "/vendor/firmware/",
 	NULL
 };
 
@@ -2079,12 +2082,16 @@ kalUpdateReAssocReqInfo(IN P_GLUE_INFO_T prGlueInfo,
 VOID kalUpdateReAssocRspInfo(IN P_GLUE_INFO_T prGlueInfo, IN PUINT_8 pucFrameBody, IN UINT_32 u4FrameBodyLen)
 {
 	UINT_32 u4IEOffset = 6;	/* cap_info, status_code & assoc_id */
-	UINT_32 u4IELength = u4FrameBodyLen - u4IEOffset;
+	UINT_32 u4IELength;
 
 	ASSERT(prGlueInfo);
 
 	/* reset */
 	prGlueInfo->u4RspIeLength = 0;
+
+	if (u4FrameBodyLen < u4IEOffset)
+		return;
+	u4IELength = u4FrameBodyLen - u4IEOffset;
 
 	if (u4IELength <= CFG_CFG80211_IE_BUF_LEN) {
 		prGlueInfo->u4RspIeLength = u4IELength;

@@ -397,6 +397,8 @@ UINT_32 rlmFillVhtCapIEByAdapter(P_ADAPTER_T prAdapter, P_BSS_INFO_T prBssInfo, 
 #endif
 
 #if CFG_SUPPORT_802_11AC
+VOID rlmGetVhtCapIE(P_ADAPTER_T prAdapter, P_IE_VHT_CAP_T prVhtCap);
+
 VOID rlmReqGenerateVhtCapIE(P_ADAPTER_T prAdapter, P_MSDU_INFO_T prMsduInfo);
 
 VOID rlmRspGenerateVhtCapIE(P_ADAPTER_T prAdapter, P_MSDU_INFO_T prMsduInfo);
