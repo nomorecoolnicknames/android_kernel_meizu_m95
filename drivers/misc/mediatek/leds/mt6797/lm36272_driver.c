@@ -208,8 +208,6 @@ static void __exit lm36272_exit(void)
 }
 module_param(lm36272_hbm, uint, 0664);
 MODULE_PARM_DESC(lm36272_hbm, "Debug Print Log Lvl");
-EXPORT_SYMBOL(lm36272_flash_strobe_en);
-
 MODULE_AUTHOR("Mars<caoziqiang@meizu.com>");
 MODULE_DESCRIPTION("Ti lm36272 driver");
 MODULE_LICENSE("GPL");

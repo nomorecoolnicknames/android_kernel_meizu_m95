@@ -323,8 +323,6 @@ static void __exit lm3697_exit(void)
 {
 	i2c_del_driver(&lm3697_i2c_driver);
 }
-EXPORT_SYMBOL(lm3697_flash_strobe_en);
-
 MODULE_AUTHOR("Albert Zhang <xu.zhang@bosch-sensortec.com>");
 MODULE_DESCRIPTION("lm3697 driver");
 MODULE_LICENSE("GPL");
