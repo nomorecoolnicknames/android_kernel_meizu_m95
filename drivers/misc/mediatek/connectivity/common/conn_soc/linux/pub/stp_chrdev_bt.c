@@ -87,6 +87,13 @@ static struct cdev BT_cdev;
 static UINT8 i_buf[BT_BUFFER_SIZE];	/* Input buffer of read() */
 static UINT8 o_buf[BT_BUFFER_SIZE];	/* Output buffer of write() */
 
+/* The AOSP H4 writer writev()s {type, payload}; without write_iter that
+ * arrives as two write()s and each write() becomes one STP frame. A frame
+ * holding only the type byte wedges the CONSYS BT firmware, so stash a lone
+ * type byte and prepend it to the next write. Protected by wr_mtx. */
+static UINT8 h4_type_stash;
+static INT32 h4_type_stashed;
+
 static struct semaphore wr_mtx, rd_mtx;
 /* Wait queue for poll and read */
 static wait_queue_head_t inq;
@@ -170,6 +177,7 @@ ssize_t BT_write(struct file *filp, const char __user *buf, size_t count, loff_t
 	INT32 retval = 0;
 	INT32 write_size;
 	INT32 written = 0;
+	INT32 pfx;
 
 	down(&wr_mtx);
 
@@ -185,20 +193,40 @@ ssize_t BT_write(struct file *filp, const char __user *buf, size_t count, loff_t
 		goto OUT;
 	}
 
-	if (count > 0) {
-		if (count < BT_BUFFER_SIZE) {
-			write_size = count;
-		} else {
-			write_size = BT_BUFFER_SIZE;
-			BT_ERR_FUNC("%s: count > BT_BUFFER_SIZE\n", __func__);
-		}
-
-		if (copy_from_user(&o_buf[0], &buf[0], write_size)) {
+	if (count == 1) {
+		if (copy_from_user(&h4_type_stash, &buf[0], 1)) {
 			retval = -EFAULT;
 			goto OUT;
 		}
+		if (h4_type_stash == 0x01 || h4_type_stash == 0x02 || h4_type_stash == 0x03) {
+			/* H4 CMD/ACL/SCO type byte on its own: hold it back and
+			 * send it in front of the payload that follows. */
+			h4_type_stashed = 1;
+			retval = 1;
+			goto OUT;
+		}
+		/* a real 1-byte payload: fall through and send it as-is */
+	}
+	pfx = h4_type_stashed ? 1 : 0;
 
-		written = mtk_wcn_stp_send_data(&o_buf[0], write_size, BT_TASK_INDX);
+	if (count > 0) {
+		if (count < BT_BUFFER_SIZE - pfx) {
+			write_size = count;
+		} else {
+			write_size = BT_BUFFER_SIZE - pfx;
+			BT_ERR_FUNC("%s: count > BT_BUFFER_SIZE\n", __func__);
+		}
+
+		if (copy_from_user(&o_buf[pfx], &buf[0], write_size)) {
+			retval = -EFAULT;
+			goto OUT;
+		}
+		if (pfx) {
+			o_buf[0] = h4_type_stash;
+			h4_type_stashed = 0;
+		}
+
+		written = mtk_wcn_stp_send_data(&o_buf[0], write_size + pfx, BT_TASK_INDX);
 		if (0 == written) {
 			retval = -ENOSPC;
 			/* No space is available, native program should not call BT_write with no delay */
@@ -206,7 +234,7 @@ ssize_t BT_write(struct file *filp, const char __user *buf, size_t count, loff_t
 			    ("Packet length %zd, sent length %d, retval = %d\n",
 			     count, written, retval);
 		} else {
-			retval = written;
+			retval = written - pfx;	/* bytes consumed from this write() */
 		}
 
 	} else {
@@ -342,6 +370,7 @@ static int BT_open(struct inode *inode, struct file *file)
 
 	BT_INFO_FUNC("WMT turn on BT OK!\n");
 	rstflag = 0;
+	h4_type_stashed = 0;
 
 	if (mtk_wcn_stp_is_ready()) {
 
@@ -374,6 +403,7 @@ static int BT_close(struct inode *inode, struct file *file)
 {
 	BT_INFO_FUNC("%s: major %d minor %d pid %d\n", __func__, imajor(inode), iminor(inode), current->pid);
 	rstflag = 0;
+	h4_type_stashed = 0;
 	mtk_wcn_wmt_msgcb_unreg(WMTDRV_TYPE_BT);
 	mtk_wcn_stp_register_event_cb(BT_TASK_INDX, NULL);
 
