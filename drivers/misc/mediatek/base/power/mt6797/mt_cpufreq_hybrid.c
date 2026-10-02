@@ -607,7 +607,10 @@ static u32 dbgx_log_en = /*(DLF_DVFS << 16) |*/
 			 DLF_PAUSE |
 			 /*DLF_SEMA |*/
 			 /*DLF_DVFS |*/
-			 DLF_CLUSTER |
+			 /* Cluster on/off follows hotplug and would flood
+			  * the log at pr_err; route it to the pr_debug half
+			  * of this switch (debugfs cpuhvfs/dbgx_log_en). */
+			 (DLF_CLUSTER << 16) |
 			 DLF_KICK;
 
 #ifdef __TRIAL_RUN__

@@ -1192,7 +1192,7 @@ static int emmc_rpmb_open_session(void)
 		/* open device */
 		mc_ret = mc_open_device(rpmb_devid);
 		if (mc_ret != MC_DRV_OK) {
-			MSG(ERR, "%s, mc_open_device failed: %d\n", __func__, mc_ret);
+			// Retried every 2 s; do not log each failure.
 			cnt++;
 			continue;
 		}

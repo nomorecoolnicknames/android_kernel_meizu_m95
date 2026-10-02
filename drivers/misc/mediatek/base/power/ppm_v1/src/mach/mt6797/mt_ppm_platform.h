@@ -60,7 +60,10 @@ extern unsigned int hps_get_hvytsk(unsigned int cluster_id);
 #define SKIP_ADVISE_BOUNDARY		(300)
 #endif
 
-#define PPM_OUTPUT_TRANS_LOG_TO_UART	(1)
+/* When defined, every PPM state transition is printed at pr_warn level
+ * (hundreds of lines per minute). Undefined, it goes through ppm_dbg,
+ * gated by the ppm_debug knob. */
+/* #define PPM_OUTPUT_TRANS_LOG_TO_UART	(1) */
 
 #ifndef PPM_DISABLE_CLUSTER_MIGRATION
 #define PPM_CLUSTER_MIGRATION_BOOST	(1)

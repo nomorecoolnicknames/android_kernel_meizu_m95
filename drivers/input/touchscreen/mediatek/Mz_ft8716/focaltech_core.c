@@ -1305,7 +1305,7 @@ void ctp_esd_check_func(void)
 		return;
 	}
 
-	TPD_DMESG("focal--91 register value = %d , old value = %d \n", data, g_old_91_Reg_Value);
+	// Periodic ESD check print removed: it floods the ram console.
 	if(0x01 == g_first_read_91)
 	{
 		g_old_91_Reg_Value = data;

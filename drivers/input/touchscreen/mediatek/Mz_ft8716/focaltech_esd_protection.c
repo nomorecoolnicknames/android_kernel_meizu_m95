@@ -124,7 +124,9 @@ static int fts_esd_protection_timeout(void *unused)
 	{
 		wait_event_interruptible_timeout(esd_protection_waiter, 0, uljiffies);
 		if(0 == g_start_esd_protection) {
-			TPD_DMESG("%s: g_start_esd_protection = 0 \n", __func__);
+			/* Normal idle state while the panel is suspended; this
+			 * used to be printed at KERN_EMERG every 2 s. */
+			TPD_DEBUG("%s: g_start_esd_protection = 0 \n", __func__);
 			continue;
 		}
 

@@ -66,8 +66,10 @@ static int _hps_timer_callback(unsigned long data)
 	/*hps_warn("_hps_timer_callback\n"); */
 	if (hps_ctxt.tsk_struct_ptr) {
 		ret = wake_up_process(hps_ctxt.tsk_struct_ptr);
+		/* wake_up_process() returns 0 when the task is already
+		 * runnable, the normal case while hps_main is busy. */
 		if (!ret)
-			pr_err("hps task wake up fail %d\n", ret);
+			pr_debug("hps task already running %d\n", ret);
 	} else {
 		pr_err("hps ptr is NULL\n");
 	}
@@ -349,7 +351,9 @@ void hps_task_wakeup_nolock(void)
 			 || (hps_ctxt.periodical_by == HPS_PERIODICAL_BY_HR_TIMER)) {
 			ret = wake_up_process(hps_ctxt.tsk_struct_ptr);
 			if (!ret) {
-				pr_err("[%s]hps task wake up fail %d\n", __func__, ret);
+				/* As in _hps_timer_callback: 0 means the task
+				 * is already runnable, not an error. */
+				pr_debug("[%s]hps task already running %d\n", __func__, ret);
 				atomic_set(&hps_ctxt.is_ondemand, 0);
 			}
 		}

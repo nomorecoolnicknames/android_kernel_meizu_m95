@@ -62,7 +62,7 @@
 
 #define EN_HPS_LOG                          (1)
 #define EN_ISR_LOG                          (0)
-#define HPS_HRT_BT_EN						(1)
+#define HPS_HRT_BT_EN						(0)
 #define HPS_HRT_DBG_MS			(5000)
 #define HPS_BIG_CLUSTER_ID					(2)
 /*
