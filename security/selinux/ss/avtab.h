@@ -50,6 +50,13 @@ struct avtab_key {
 				AVTAB_OPTYPE_AUDITALLOW | \
 				AVTAB_OPTYPE_DONTAUDIT)
 #define AVTAB_OP		(AVTAB_OPNUM | AVTAB_OPTYPE)
+#define AVTAB_XPERMS		0x8000 /* ioctl xperm entries (policydb v30) */
+
+/* policydb v30 xperms entries carry a one-byte `specified` selector, stored
+ * in avtab_operation.type, followed by the driver byte stored in .driver.
+ * These are the selector values libsepol writes, not driver bytes. */
+#define AVTAB_XPERMS_IOCTLFUNCTION	0x01 /* perms = commands within .driver */
+#define AVTAB_XPERMS_IOCTLDRIVER	0x02 /* perms = bitmap of driver bytes  */
 #define AVTAB_ENABLED_OLD   0x80000000 /* reserved for used in cond_avtab */
 #define AVTAB_ENABLED		0x8000 /* reserved for used in cond_avtab */
 	u16 specified;	/* what field is specified */
@@ -57,6 +64,7 @@ struct avtab_key {
 
 struct avtab_operation {
 	u8 type;
+	u8 driver;	/* ioctl driver byte */
 	struct operation_perm op;
 };
 
