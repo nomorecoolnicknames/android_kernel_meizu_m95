@@ -50,7 +50,16 @@ struct fpsimd_context {
 	struct _aarch64_ctx head;
 	__u32 fpsr;
 	__u32 fpcr;
+	/*
+	 * The installed arm64 uapi headers are also used by 32-bit ARM userspace
+	 * builds, where __uint128_t does not exist. A 32-bit process never uses
+	 * this frame; it only has to compile. Same layout: 32 x 128 == 64 x 64 bits.
+	 */
+#if defined(__SIZEOF_INT128__)
 	__uint128_t vregs[32];
+#else
+	__u64 vregs[64];
+#endif
 };
 
 /* ESR_EL1 context */
