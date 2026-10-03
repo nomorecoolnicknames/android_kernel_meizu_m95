@@ -2504,6 +2504,7 @@ struct proto tcp_prot = {
 	.max_header		= MAX_TCP_HEADER,
 	.obj_size		= sizeof(struct tcp_sock),
 	.slab_flags		= SLAB_DESTROY_BY_RCU,
+	.diag_destroy		= tcp_abort,
 	.twsk_prot		= &tcp_timewait_sock_ops,
 	.rsk_prot		= &tcp_request_sock_ops,
 	.h.hashinfo		= &tcp_hashinfo,
